@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1"
+  />
+  <title>Website Speed Test - AI2Flows</title>
+  <style>
+    :root {
+      --ai2flows-primary: #667eea;
+      --ai2flows-secondary: #764ba2;
+      --ai2flows-success: #28a745;
+      --ai2flows-warning: #ffc107;
+      --ai2flows-danger: #dc3545;
+      --ai2flows-light: #f8f9fa;
+      --ai2flows-dark: #2c3e50;
+      --ai2flows-muted: #7f8c8d;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, var(--ai2flows-primary) 0%, var(--ai2flows-secondary) 100%);
+      padding: 20px;
+      color: var(--ai2flows-dark);
+    }
+
+    .container {
+      max-width: 980px;
+      margin: 0 auto;
+      background: #ffffff;
+      border-radius: 20px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.12);
+      overflow: hidden;
+    }
+
+    .header {
+      padding: 28px 28px 10px;
+      background: linear-gradient(135deg, #eef2ff 0%, #f7f2ff 100%);
+      border-bottom: 1px solid #edf2f7;
+    }
+
+    .title {
+      margin: 0;
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing: 0.2px;
+      background: linear-gradient(135deg, var(--ai2flows-primary) 0%, var(--ai2flows-secondary) 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+
+    .subtitle {
+      margin: 8px 0 0;
+      color: var(--ai2flows-muted);
+      font-size: 14px;
+    }
+
+    .content {
+      padding: 22px 28px 28px;
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .input {
+      width: 100%;
+      height: 48px;
+      padding: 0 14px;
+      border: 2px solid #e6e8ef;
+      border-radius: 12px;
+      font-size: 15px;
+      outline: none;
+      transition: 0.2s border-color, 0.2s box-shadow;
+    }
+
+    .input:focus {
+      border-color: var(--ai2flows-primary);
+      box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.12);
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      height: 48px;
+      padding: 0 18px;
+      border: none;
+      border-radius: 12px;
+      background: linear-gradient(135deg, var(--ai2flows-primary), var(--ai2flows-secondary));
+      color: #fff;
+      font-weight: 700;
+      font-size: 15px;
+      cursor: pointer;
+      box-shadow: 0 10px 18px rgba(102, 126, 234, 0.35);
+      transition: transform 0.06s ease, box-shadow 0.2s ease;
+    }
+
+    .btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 14px 22px rgba(102, 126, 234, 0.45);
+    }
+
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .helper {
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--ai2flows-muted);
+    }
+
+    .status {
+      margin-top: 16px;
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: #f8faff;
+      color: #4361ee;
+      border: 1px solid #e6ecff;
+      display: none;
+      font-size: 14px;
+    }
+
+    .error {
+      background: #fff5f5;
+      color: #c53030;
+      border-color: #fed7d7;
+    }
+
+    .grid {
+      margin-top: 22px;
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      gap: 18px;
+    }
+
+    .card {
+      background: #fff;
+      border: 1px solid #edf2f7;
+      border-radius: 16px;
+      padding: 16px;
+    }
+
+    .card h3 {
+      margin: 0 0 10px;
+      font-size: 16px;
+      color: var(--ai2flows-dark);
+    }
+
+    .score-wrap {
+      display: grid;
+      place-items: center;
+      padding-top: 6px;
+      padding-bottom: 6px;
+    }
+
+    .score-ring {
+      --p: 0;
+      width: 160px;
+      height: 160px;
+      border-radius: 50%;
+      background:
+        radial-gradient(closest-side, white 72%, transparent 73% 100%),
+        conic-gradient(var(--ai2flows-success) calc(var(--p) * 1%), #e9edf7 0);
+      position: relative;
+      box-shadow: inset 0 0 0 10px #f5f7ff;
+    }
+
+    .score-ring .label {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+      color: var(--ai2flows-dark);
+      font-size: 28px;
+    }
+
+    .score-note {
+      margin-top: 10px;
+      font-size: 12px;
+      color: var(--ai2flows-muted);
+      text-align: center;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .metric {
+      border: 1px dashed #eaeef6;
+      border-radius: 12px;
+      padding: 12px;
+      background: #fcfdff;
+    }
+
+    .metric .k {
+      font-size: 12px;
+      color: var(--ai2flows-muted);
+    }
+
+    .metric .v {
+      margin-top: 4px;
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--ai2flows-dark);
+    }
+
+    .section {
+      margin-top: 18px;
+    }
+
+    .tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .tag {
+      font-size: 12px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid #e8ecf5;
+      background: #fafbff;
+      color: var(--ai2flows-dark);
+    }
+
+    .issue {
+      display: grid;
+      grid-template-columns: 90px 1fr;
+      gap: 12px;
+      border: 1px solid #f1f4fb;
+      border-radius: 12px;
+      padding: 12px;
+      background: #ffffff;
+    }
+
+    .badge {
+      display: inline-block;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-weight: 700;
+      font-size: 12px;
+      color: #fff;
+      text-transform: capitalize;
+      text-align: center;
+    }
+
+    .high { background: #e74c3c; }
+    .medium { background: #f39c12; }
+    .low { background: #3498db; }
+
+    .rec {
+      border: 1px solid #edf2f7;
+      border-radius: 12px;
+      padding: 12px;
+      background: #fbfdff;
+    }
+
+    .rec h4 {
+      margin: 0 0 6px;
+      font-size: 14px;
+      color: var(--ai2flows-dark);
+    }
+
+    .rec small {
+      display: inline-block;
+      margin-bottom: 8px;
+      color: var(--ai2flows-muted);
+    }
+
+    .rec ul {
+      margin: 8px 0 0 16px;
+      padding: 0;
+      color: var(--ai2flows-dark);
+      font-size: 14px;
+    }
+
+    .divider {
+      height: 1px;
+      background: #edf2f7;
+      margin: 14px 0;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    @media (max-width: 860px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1 class="title">Website Speed Test</h1>
+      <p class="subtitle">AI2Flows quick audit: measure load time, detect performance issues, and get actionable fixes.</p>
+    </div>
+
+    <div class="content">
+      <form id="speedForm" class="card" onsubmit="return false;">
+        <h3>Enter a URL</h3>
+        <div class="form-row">
+          <input
+            id="urlInput"
+            class="input"
+            type="url"
+            placeholder="https://example.com"
+            required
+            pattern="https?://.*"
+          />
+          <button id="runBtn" class="btn" type="submit">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+              <path d="M13 3H6a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-7"
+                    stroke="white" stroke-width="2" stroke-linecap="round"/>
+              <path d="M10 14l11-11" stroke="white" stroke-width="2" stroke-linecap="round"/>
+              <path d="M22 3v6h-6" stroke="white" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            Run Speed Test
+          </button>
+        </div>
+        <div class="helper">Tip: Include https:// for best accuracy. We’ll analyze the page and suggest improvements.</div>
+
+        <div id="status" class="status">Running test… this usually takes 3–10 seconds.</div>
+        <div id="error" class="status error hidden">Something went wrong. Please try again.</div>
+      </form>
+
+      <div id="results" class="grid hidden">
+        <!-- Left: Score + quick metrics -->
+        <div class="card">
+          <h3>Overall Score</h3>
+          <div class="score-wrap">
+            <div id="scoreRing" class="score-ring" style="--p: 0;">
+              <div id="scoreLabel" class="label">0</div>
+            </div>
+            <div class="score-note">0–49 Poor • 50–89 Needs Work • 90–100 Good</div>
+          </div>
+
+          <div class="divider"></div>
+          <h3>Key Metrics</h3>
+          <div class="metrics">
+            <div class="metric">
+              <div class="k">TTFB</div>
+              <div id="m_ttfb" class="v">–</div>
+            </div>
+            <div class="metric">
+              <div class="k">Total Load</div>
+              <div id="m_total" class="v">–</div>
+            </div>
+            <div class="metric">
+              <div class="k">Response Code</div>
+              <div id="m_code" class="v">–</div>
+            </div>
+            <div class="metric">
+              <div class="k">HTML Size</div>
+              <div id="m_size" class="v">–</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Details -->
+        <div class="card">
+          <h3>Details</h3>
+
+          <div class="section">
+            <strong>Compression & Caching</strong>
+            <div class="tags" id="tags_cc"></div>
+          </div>
+
+          <div class="section">
+            <strong>Resources Summary</strong>
+            <div class="tags" id="tags_res"></div>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="section">
+            <h3>Issues Found</h3>
+            <div id="issues"></div>
+            <div id="issues_none" class="helper hidden">No major issues detected 🎉</div>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="section">
+            <h3>Recommendations</h3>
+            <div id="recs"></div>
+            <div id="recs_none" class="helper hidden">No recommendations at this time.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /**
+     * CONFIG
+     * If your API is hosted on a different domain than the GHL page,
+     * set API_BASE to your backend origin (e.g., "https://api.yourdomain.com").
+     * Ensure CORS is enabled in FastAPI for the GHL domain.
+     */
+    const API_BASE = ""; // e.g., "https://api.ai2flows.com" or leave empty if same origin
+    const SPEED_ENDPOINT = (API_BASE || "") + "/api/speed-check";
+
+    const el = (id) => document.getElementById(id);
+    const fmtMs = (v) => (typeof v === "number" ? `${Math.round(v)} ms` : "–");
+    const fmtBytes = (b) => {
+      if (typeof b !== "number" || isNaN(b)) return "–";
+      if (b < 1024) return `${b} B`;
+      if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+      return `${(b / (1024 * 1024)).toFixed(2)} MB`;
+    };
+
+    function setScore(score) {
+      const s = Math.max(0, Math.min(100, Number(score) || 0));
+      el("scoreRing").style.setProperty("--p", s);
+      el("scoreLabel").textContent = s;
+      // color nuance based on score
+      const ring = el("scoreRing");
+      const good = "#28a745";
+      const warn = "#f39c12";
+      const bad = "#e74c3c";
+      const col = s >= 90 ? good : s >= 50 ? warn : bad;
+      ring.style.background =
+        `radial-gradient(closest-side, white 72%, transparent 73% 100%),` +
+        `conic-gradient(${col} ${s}%, #e9edf7 0)`;
+    }
+
+    function renderTags(containerId, tags) {
+      const c = el(containerId);
+      c.innerHTML = "";
+      tags.forEach((t) => {
+        const span = document.createElement("span");
+        span.className = "tag";
+        span.textContent = t;
+        c.appendChild(span);
+      });
+    }
+
+    function renderIssues(issues) {
+      const c = el("issues");
+      c.innerHTML = "";
+      if (!issues || !issues.length) {
+        el("issues_none").classList.remove("hidden");
+        return;
+      }
+      el("issues_none").classList.add("hidden");
+
+      issues.forEach((it) => {
+        const wrap = document.createElement("div");
+        wrap.className = "issue";
+        const sev = (it.severity || "low").toLowerCase();
+        wrap.innerHTML = `
+          <div><span class="badge ${sev}">${sev}</span></div>
+          <div>
+            <strong>${it.issue || "Issue"}</strong>
+            <div class="helper">${it.description || ""}</div>
+            ${it.impact ? `<div class="helper"><em>Impact:</em> ${it.impact}</div>` : ""}
+          </div>
+        `;
+        c.appendChild(wrap);
+        c.appendChild(document.createElement("div")).className = "divider";
+      });
+    }
+
+    function renderRecs(recs) {
+      const c = el("recs");
+      c.innerHTML = "";
+      if (!recs || !recs.length) {
+        el("recs_none").classList.remove("hidden");
+        return;
+      }
+      el("recs_none").classList.add("hidden");
+
+      recs.forEach((r) => {
+        const box = document.createElement("div");
+        box.className = "rec";
+        const actions = Array.isArray(r.actions) ? r.actions : [];
+        const pr = (r.priority || "").toLowerCase();
+        const chipColor = pr === "high" ? "#e74c3c" : pr === "medium" ? "#f39c12" : "#3498db";
+        box.innerHTML = `
+          <h4>${r.category || "Recommendation"}</h4>
+          <small style="color:${chipColor}; font-weight:700; text-transform:uppercase;">${r.priority || "medium"}</small>
+          <div class="helper" style="margin:6px 0 8px; color:#4a5568;">${r.recommendation || ""}</div>
+          ${
+            actions.length
+              ? `<ul>${actions.map((a) => `<li>${a}</li>`).join("")}</ul>`
+              : ""
+          }
+        `;
+        c.appendChild(box);
+        c.appendChild(document.createElement("div")).className = "divider";
+      });
+    }
+
+    function renderResults(data) {
+      // Score
+      setScore(data.score || (data.lighthouse_metrics && data.lighthouse_metrics.performance) || 0);
+
+      // Metrics
+      const lt = data.loading_times || {};
+      el("m_ttfb").textContent = fmtMs(lt.ttfb);
+      el("m_total").textContent = fmtMs(lt.total_load_time);
+      el("m_code").textContent = lt.response_code || "–";
+      el("m_size").textContent = fmtBytes(lt.content_length);
+
+      // Compression & Caching
+      const page = data.page_size_analysis || {};
+      const ccTags = [];
+      ccTags.push(`Encoding: ${page.content_encoding || "none"}`);
+      ccTags.push(`Compression: ${typeof page.compression_ratio === "number" ? page.compression_ratio.toFixed(1) + "%" : "n/a"}`);
+      ccTags.push(`Cache-Control: ${page.cache_control || "none"}`);
+      if (page.expires && page.expires !== "none") ccTags.push(`Expires: ${page.expires}`);
+      renderTags("tags_cc", ccTags);
+
+      // Resources
+      const res = data.resource_analysis || {};
+      const resTags = [];
+      resTags.push(`Images: ${res.total_images ?? 0}`);
+      resTags.push(`Scripts: ${res.total_scripts ?? 0}`);
+      resTags.push(`Stylesheets: ${res.total_stylesheets ?? 0}`);
+      resTags.push(`Fonts: ${res.total_fonts ?? 0}`);
+      renderTags("tags_res", resTags);
+
+      // Issues
+      renderIssues(data.performance_issues || []);
+
+      // Recommendations
+      renderRecs(data.recommendations || []);
+    }
+
+    async function runTest(url) {
+      // Reset UI
+      el("results").classList.add("hidden");
+      el("error").classList.add("hidden");
+      el("status").classList.remove("hidden");
+      el("status").textContent = "Running test… this usually takes 3–10 seconds.";
+      el("runBtn").disabled = true;
+
+      try {
+        const payload = new URLSearchParams();
+        payload.set("url", url);
+
+        const resp = await fetch(SPEED_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: payload.toString(),
+        });
+
+        const json = await resp.json().catch(() => ({}));
+
+        if (!resp.ok || json.success === false) {
+          throw new Error(json.error || json.message || "Request failed");
+        }
+
+        const data = json.data || json; // support both shapes
+        renderResults(data);
+
+        el("status").classList.add("hidden");
+        el("results").classList.remove("hidden");
+      } catch (e) {
+        el("status").classList.add("hidden");
+        el("error").textContent = `Error: ${e.message || e}`;
+        el("error").classList.remove("hidden");
+      } finally {
+        el("runBtn").disabled = false;
+      }
+    }
+
+    // Form handling
+    document.getElementById("speedForm").addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      const raw = el("urlInput").value.trim();
+      if (!raw) return;
+
+      let url = raw;
+      if (!/^https?:\/\//i.test(url)) {
+        url = "https://" + url;
+      }
+      runTest(url);
+    });
+  </script>
+</body>
+</html>

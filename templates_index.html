@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+
+{% block title %}Home - Competitive Traffic Checker{% endblock %}
+
+{% block content %}
+<div class="hero-section">
+    <div class="container text-center">
+        <h1 class="display-4 mb-4">Analyze Your Competitors' Traffic</h1>
+        <p class="lead mb-4">Get detailed insights into competitor keywords, traffic estimates, and content gaps with our AI-powered analysis tool.</p>
+        <a href="#analyzer" class="btn btn-light btn-lg">Start Analysis</a>
+    </div>
+</div>
+
+<div class="container mt-5" id="analyzer">
+    <div class="row justify-content-center">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-body p-4">
+                    <h2 class="card-title text-center mb-4">
+                        <i class="fas fa-search me-2"></i>
+                        Domain Analysis
+                    </h2>
+                    
+                    <form action="/analyze" method="post" id="analysisForm">
+                        <div class="mb-3">
+                            <label for="domain" class="form-label">Competitor Domain</label>
+                            <div class="input-group">
+                                <span class="input-group-text">
+                                    <i class="fas fa-globe"></i>
+                                </span>
+                                <input 
+                                    type="text" 
+                                    class="form-control" 
+                                    id="domain" 
+                                    name="domain" 
+                                    placeholder="example.com" 
+                                    required
+                                    pattern="[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
+                                    title="Please enter a valid domain name"
+                                >
+                            </div>
+                            <div class="form-text">
+                                Enter the competitor's domain (without http:// or https://)
+                            </div>
+                        </div>
+                        
+                        <div class="d-grid">
+                            <button type="submit" class="btn btn-primary btn-lg" id="analyzeBtn">
+                                <span class="btn-text">
+                                    <i class="fas fa-chart-bar me-2"></i>
+                                    Start Analysis
+                                </span>
+                                <span class="btn-loading d-none">
+                                    <span class="spinner-border spinner-border-sm me-2"></span>
+                                    Analyzing...
+                                </span>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="container mt-5">
+    <div class="row">
+        <div class="col-md-4 mb-4">
+            <div class="card h-100">
+                <div class="card-body text-center">
+                    <i class="fas fa-keywords fa-3x text-primary mb-3"></i>
+                    <h5>Keyword Analysis</h5>
+                    <p>Discover what keywords your competitors rank for and their positions in search results.</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4 mb-4">
+            <div class="card h-100">
+                <div class="card-body text-center">
+                    <i class="fas fa-chart-line fa-3x text-success mb-3"></i>
+                    <h5>Traffic Estimation</h5>
+                    <p>Get accurate estimates of your competitors' organic traffic using multiple methodologies.</p>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-4 mb-4">
+            <div class="card h-100">
+                <div class="card-body text-center">
+                    <i class="fas fa-gap fa-3x text-warning mb-3"></i>
+                    <h5>Content Gaps</h5>
+                    <p>Identify content opportunities and gaps in your competitors' strategy.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.getElementById('analysisForm').addEventListener('submit', function(e) {
+    const btn = document.getElementById('analyzeBtn');
+    const btnText = btn.querySelector('.btn-text');
+    const btnLoading = btn.querySelector('.btn-loading');
+    
+    btn.disabled = true;
+    btnText.classList.add('d-none');
+    btnLoading.classList.remove('d-none');
+    
+    // Show analysis progress message
+    const progressDiv = document.createElement('div');
+    progressDiv.className = 'alert alert-info mt-3';
+    progressDiv.innerHTML = '<i class="fas fa-info-circle me-2"></i>Analysis started! This may take 30-60 seconds. Please wait...';
+    
+    const form = document.getElementById('analysisForm');
+    form.appendChild(progressDiv);
+});
+
+// Domain input validation
+document.getElementById('domain').addEventListener('input', function(e) {
+    const domain = e.target.value;
+    const cleanDomain = domain.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    if (cleanDomain !== domain) {
+        e.target.value = cleanDomain;
+    }
+});
+</script>
+{% endblock %}
