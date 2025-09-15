@@ -2,6 +2,7 @@ import os
 import sys
 import logging
 import pkgutil
+from typing import Optional
 
 # -----------------------------------------------------------------------------
 # Early startup diagnostics (helps catch stale/cached files in deployed images)
@@ -106,7 +107,10 @@ nlp_processor = NLPProcessor()
 clusterer = KeywordClusterer()
 gap_analyzer = ContentGapAnalyzer()
 pdf_generator = PDFGenerator()
+
+
 def get_serp_client():
+    """Lazy-load the SERP client to avoid import-time crashes."""
     global serp_client
     if serp_client is not None:
         return serp_client
@@ -116,12 +120,16 @@ def get_serp_client():
         logger.info("Initialized SERPClient successfully")
     except Exception as e:
         logger.exception("Failed to import/initialize SERPClient; falling back to mock client: %s", e)
+
         class _MockSERPClient:
-            async def get_domain_keywords(self, domain: str):
+            async def get_domain_keywords(
+                self, domain: str, country: str = "US", language: str = "en", location: Optional[str] = None
+            ):
+                head = domain.split(".")[0]
                 return {
                     "keywords": [
-                        {"keyword": f"{domain.split('.')[0]} services", "position": 1, "search_volume": 1000},
-                        {"keyword": f"{domain.split('.')[0]} pricing", "position": 2, "search_volume": 350},
+                        {"keyword": f"{head} services", "position": 1, "search_volume": 1000},
+                        {"keyword": f"{head} pricing", "position": 2, "search_volume": 350},
                     ],
                     "top_urls": [
                         {"url": f"https://{domain}/", "title": f"{domain} - Home", "position": 1},
@@ -129,8 +137,11 @@ def get_serp_client():
                     ],
                     "provider": "mock-fallback",
                 }
+
         serp_client = _MockSERPClient()
     return serp_client
+
+
 # -----------------------------------------------------------------------------
 # Lifecycle
 # -----------------------------------------------------------------------------
@@ -143,6 +154,7 @@ async def startup_event():
     except Exception as e:
         logger.exception("Database initialization failed: %s", e)
         raise
+
 
 # -----------------------------------------------------------------------------
 # API Endpoints for GHL Integration
@@ -163,6 +175,7 @@ async def api_speed_check(
 
         client_ip = get_client_ip(request)
         from deps import log_analytics_event
+
         await log_analytics_event(
             db, "speed_analysis", url, client_ip, {"score": speed_results.get("score", 0)}
         )
@@ -196,6 +209,7 @@ async def api_seo_analysis(
 
         client_ip = get_client_ip(request)
         from deps import log_analytics_event
+
         await log_analytics_event(
             db,
             "seo_analysis",
@@ -221,14 +235,25 @@ async def api_competitor_analysis(
     request: Request,
     domain: str = Form(...),
     country: str = Form("US"),
+    language: str = Form("en"),
+    location: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
     """API endpoint for competitor analysis - GHL compatible"""
     try:
         await rate_limiter(request)
-        logger.info("API Competitor analysis requested for: %s", domain)
+        logger.info(
+            "API Competitor analysis requested for: %s [%s/%s%s]",
+            domain,
+            country,
+            language,
+            f" | {location}" if location else "",
+        )
 
-        # serp_data = await get_serp_client().get_domain_keywords(domain)
+        serp_data = await get_serp_client().get_domain_keywords(
+            domain, country=country, language=language, location=location
+        )
+
         if not serp_data or not serp_data.get("keywords"):
             return JSONResponse(
                 {
@@ -251,6 +276,8 @@ async def api_competitor_analysis(
         analysis_data = {
             "domain": domain,
             "country": country,
+            "language": language,
+            "location": location,
             "analysis_date": datetime.utcnow().isoformat(),
             "traffic_estimate": traffic_estimate,
             "keywords": serp_data["keywords"][:50],
@@ -271,11 +298,18 @@ async def api_competitor_analysis(
 
         client_ip = get_client_ip(request)
         from deps import log_analytics_event
+
         await log_analytics_event(
-            db, "competitor_analysis", domain, client_ip, {"country": country, "keywords_found": len(serp_data["keywords"])}
+            db,
+            "competitor_analysis",
+            domain,
+            client_ip,
+            {"country": country, "language": language, "location": location, "keywords_found": len(serp_data["keywords"])},
         )
 
-        return JSONResponse({"success": True, "data": analysis_data, "message": "Competitor analysis completed successfully"})
+        return JSONResponse(
+            {"success": True, "data": analysis_data, "message": "Competitor analysis completed successfully"}
+        )
     except HTTPException:
         raise
     except Exception as e:
@@ -287,7 +321,7 @@ async def api_competitor_analysis(
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
-    # Render existing file at repository root
+    # Render existing file at repository root (now moved to templates/)
     return templates.TemplateResponse("templates_index.html", {"request": request})
 
 
@@ -334,6 +368,7 @@ async def api_health_check():
         }
     )
 
+
 if __name__ == "__main__":
     # IMPORTANT: if you run this file directly, point uvicorn at THIS module (not "main")
     uvicorn.run(
@@ -343,4 +378,3 @@ if __name__ == "__main__":
         reload=os.getenv("RELOAD", "0") == "1",
         log_level=os.getenv("LOG_LEVEL", "info"),
     )
-
