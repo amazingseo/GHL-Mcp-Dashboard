@@ -184,6 +184,10 @@ async def api_speed_check(
             db, "speed_analysis", url, client_ip, {"score": speed_results.get("score", 0)}
         )
 
+        # Convert datetime objects to strings
+        if 'analysis_date' in speed_results:
+            speed_results['analysis_date'] = speed_results['analysis_date'].isoformat()
+
         return JSONResponse(
             {"success": True, "data": speed_results, "message": "Speed analysis completed successfully"}
         )
@@ -194,7 +198,6 @@ async def api_speed_check(
         return JSONResponse(
             {"success": False, "error": str(e), "message": "Speed analysis failed"}, status_code=500
         )
-
 
 @app.post("/api/seo-analysis")
 async def api_seo_analysis(
@@ -382,6 +385,7 @@ if __name__ == "__main__":
         reload=os.getenv("RELOAD", "0") == "1",
         log_level=os.getenv("LOG_LEVEL", "info"),
     )
+
 
 
 
