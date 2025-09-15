@@ -38,7 +38,7 @@ async def rate_limiter(request: Request) -> bool:
     if len(rate_limit_storage[client_ip]) >= 10:
         raise HTTPException(
             status_code=429,
-            detail=f"Rate limit exceeded. Maximum 10 requests per hour."
+            detail="Rate limit exceeded. Maximum 10 requests per hour."
         )
     
     # Add current request
