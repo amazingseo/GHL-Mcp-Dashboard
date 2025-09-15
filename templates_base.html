@@ -4,16 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>{% block title %}AI2Flows Competitive Analyzer{% endblock %}</title>
-
-  <!-- Bootstrap CSS -->
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"
-        integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
-
-  <!-- Font Awesome (Free) -->
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" rel="stylesheet"
-        integrity="sha512-HoA8OkwYfW0qg2qY0r7qS6aA3X7Jt3t1zW4mYkJzY3w8H9Zp1jXwYk8b3KxJf0T5rS0p0+3V0F9u7VnYyQp7Yw==" crossorigin="anonymous" referrerpolicy="no-referrer" />
-
-  <!-- App CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
 </head>
 <body>
@@ -32,19 +24,11 @@
       </div>
     </div>
   </nav>
-
   {% block content %}{% endblock %}
-
   <footer class="py-4 bg-light mt-5 border-top">
-    <div class="container text-center text-muted small">
-      © {{ (datetime.utcnow().year) if false else "" }} AI2Flows. All rights reserved.
-    </div>
+    <div class="container text-center text-muted small">© AI2Flows</div>
   </footer>
-
-  <!-- Bootstrap JS -->
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
-          integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
-
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   {% block extra_js %}{% endblock %}
 </body>
 </html>
