@@ -56,13 +56,13 @@ class AnalyticsEvent(Base):
 
 # Normalize DATABASE_URL for async Postgres in production
 def _normalize_db_url(url: str) -> str:
+    # Auto-upgrade postgres:// to postgresql+asyncpg:// for async engine usage
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
     if url.startswith("postgresql://") and "+asyncpg" not in url:
         url = url.replace("postgresql://", "postgresql+asyncpg://")
     return url
 
-# Database engine and session
 engine = create_async_engine(
     _normalize_db_url(settings.DATABASE_URL),
     echo=False,
@@ -76,12 +76,10 @@ AsyncSessionLocal = sessionmaker(
 )
 
 async def init_db():
-    """Initialize database tables."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
 async def get_db() -> AsyncSession:
-    """Dependency to get database session."""
     async with AsyncSessionLocal() as session:
         try:
             yield session
@@ -89,14 +87,8 @@ async def get_db() -> AsyncSession:
             await session.close()
 
 async def cleanup_expired_data():
-    """Clean up expired cache entries and reports."""
     async with AsyncSessionLocal() as session:
         now = datetime.utcnow()
-        # ORM deletes (avoid raw SQL in async context)
-        await session.execute(
-            delete(CachedReport).where(CachedReport.expires_at < now)
-        )
-        await session.execute(
-            delete(APICache).where(APICache.expires_at < now)
-        )
+        await session.execute(delete(CachedReport).where(CachedReport.expires_at < now))
+        await session.execute(delete(APICache).where(APICache.expires_at < now))
         await session.commit()
