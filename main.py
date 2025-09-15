@@ -319,7 +319,7 @@ async def api_competitor_analysis(
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
     # Render existing file at repository root (now moved to templates/)
-    return templates.TemplateResponse("templates_index.html", {"request": request})
+    return templates.TemplateResponse("index.html", {"request": request})
 
 
 @app.get("/speed-test", response_class=HTMLResponse)
@@ -330,13 +330,13 @@ async def speed_test_page(request: Request):
 @app.get("/seo-analysis", response_class=HTMLResponse)
 async def seo_analysis_page(request: Request):
     # Use existing informational page for now
-    return templates.TemplateResponse("templates_report.html", {"request": request})
+    return templates.TemplateResponse("report.html", {"request": request})
 
 
 @app.get("/competitor-analysis", response_class=HTMLResponse)
 async def competitor_analysis_page(request: Request):
     # Reuse the home page form
-    return templates.TemplateResponse("templates_index.html", {"request": request})
+    return templates.TemplateResponse("index.html", {"request": request})
 
 
 @app.post("/analyze")
@@ -375,4 +375,5 @@ if __name__ == "__main__":
         reload=os.getenv("RELOAD", "0") == "1",
         log_level=os.getenv("LOG_LEVEL", "info"),
     )
+
 
