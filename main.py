@@ -47,7 +47,7 @@ from fastapi.templating import Jinja2Templates  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 import uvicorn  # noqa: E402
 from datetime import datetime  # noqa: E402
-
+from typing import Optional
 from models_db import init_db, get_db  # noqa: E402
 from services_traffic_estimator import TrafficEstimator  # noqa: E402
 from services_scraper import WebScraper  # noqa: E402
@@ -375,5 +375,6 @@ if __name__ == "__main__":
         reload=os.getenv("RELOAD", "0") == "1",
         log_level=os.getenv("LOG_LEVEL", "info"),
     )
+
 
 
