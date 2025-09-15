@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy import Column, String, Text, DateTime, Integer, Float, JSON
+from sqlalchemy import Column, String, Text, DateTime, Integer, Float, JSON, delete
 from datetime import datetime, timedelta
 import uuid
 from config import settings
@@ -51,11 +51,20 @@ class AnalyticsEvent(Base):
     event_type = Column(String, nullable=False)  # 'analysis_started', 'report_viewed', etc.
     domain = Column(String)
     timestamp = Column(DateTime, default=datetime.utcnow)
+    user_ip = Column(String)  # added to match usage
     event_metadata = Column(JSON)  # renamed from 'metadata'
+
+# Normalize DATABASE_URL for async Postgres in production
+def _normalize_db_url(url: str) -> str:
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    if url.startswith("postgresql://") and "+asyncpg" not in url:
+        url = url.replace("postgresql://", "postgresql+asyncpg://")
+    return url
 
 # Database engine and session
 engine = create_async_engine(
-    settings.DATABASE_URL,
+    _normalize_db_url(settings.DATABASE_URL),
     echo=False,
     future=True
 )
@@ -83,17 +92,11 @@ async def cleanup_expired_data():
     """Clean up expired cache entries and reports."""
     async with AsyncSessionLocal() as session:
         now = datetime.utcnow()
-        
-        # Clean expired reports
+        # ORM deletes (avoid raw SQL in async context)
         await session.execute(
-            "DELETE FROM cached_reports WHERE expires_at < :now",
-            {"now": now}
+            delete(CachedReport).where(CachedReport.expires_at < now)
         )
-        
-        # Clean expired cache entries
         await session.execute(
-            "DELETE FROM api_cache WHERE expires_at < :now",
-            {"now": now}
+            delete(APICache).where(APICache.expires_at < now)
         )
-        
         await session.commit()
