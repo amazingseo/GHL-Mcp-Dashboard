@@ -80,13 +80,12 @@ async def log_analytics_event(
 ):
     """Log analytics event"""
     from models_db import AnalyticsEvent
-    import json
-    
+
     event = AnalyticsEvent(
         event_type=event_type,
         domain=domain,
         user_ip=user_ip,
-        metadata=json.dumps(metadata) if metadata else None
+        event_metadata=metadata or {}
     )
     
     db.add(event)
