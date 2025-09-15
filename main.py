@@ -74,7 +74,13 @@ app = FastAPI(
     description="Comprehensive SEO analysis and website speed optimization tool by AI2Flows",
     version="2.0.0",
 )
-
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for now
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 logger.info("Resolved BASE_DIR=%s", BASE_DIR)
 logger.info("Resolved STATIC_DIR=%s exists=%s", STATIC_DIR, STATIC_DIR.is_dir())
 logger.info("Resolved TEMPLATES_DIR=%s exists=%s", TEMPLATES_DIR, TEMPLATES_DIR.is_dir())
@@ -375,6 +381,7 @@ if __name__ == "__main__":
         reload=os.getenv("RELOAD", "0") == "1",
         log_level=os.getenv("LOG_LEVEL", "info"),
     )
+
 
 
 
