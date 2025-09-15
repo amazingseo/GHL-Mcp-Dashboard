@@ -51,7 +51,7 @@ class AnalyticsEvent(Base):
     event_type = Column(String, nullable=False)  # 'analysis_started', 'report_viewed', etc.
     domain = Column(String)
     timestamp = Column(DateTime, default=datetime.utcnow)
-    metadata = Column(JSON)
+    event_metadata = Column(JSON)
 
 # Database engine and session
 engine = create_async_engine(
