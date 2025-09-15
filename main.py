@@ -2,14 +2,12 @@ import os
 import sys
 import logging
 import pkgutil
-from typing import Optional
+from pathlib import Path
 
 # -----------------------------------------------------------------------------
-# Early startup diagnostics (helps catch stale/cached files in deployed images)
-# Set DEBUG_STARTUP=0 to disable these prints.
+# Early startup diagnostics (unchanged)
 # -----------------------------------------------------------------------------
 DEBUG_STARTUP = os.getenv("DEBUG_STARTUP", "1") == "1"
-
 if DEBUG_STARTUP:
     print("DEBUG: Python:", sys.version, flush=True)
     try:
@@ -18,13 +16,11 @@ if DEBUG_STARTUP:
         print("DEBUG: pydantic version:", _pyd_ver, flush=True)
     except Exception as _e:
         print("DEBUG: pydantic import failed:", _e, flush=True)
-
     try:
         _ps_installed = pkgutil.find_loader("pydantic_settings") is not None
         print("DEBUG: pydantic-settings installed?:", _ps_installed, flush=True)
     except Exception as _e:
         print("DEBUG: pydantic-settings check failed:", _e, flush=True)
-
     try:
         cfg_path = os.path.join(os.path.dirname(__file__), "config.py")
         with open(cfg_path, "r", encoding="utf-8") as _f:
@@ -33,9 +29,7 @@ if DEBUG_STARTUP:
     except Exception as _e:
         print("DEBUG: could not read config.py:", _e, flush=True)
 
-# -----------------------------------------------------------------------------
-# Import settings FIRST to fail fast if there's a config/import issue
-# -----------------------------------------------------------------------------
+# Import settings FIRST
 try:
     from config import settings  # noqa: F401
 except Exception:
@@ -46,9 +40,6 @@ except Exception:
     )
     raise
 
-# -----------------------------------------------------------------------------
-# Rest of imports (safe to import now that config works)
-# -----------------------------------------------------------------------------
 from fastapi import FastAPI, Request, Depends, HTTPException, Form  # noqa: E402
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
@@ -70,32 +61,38 @@ from models_schemas import AnalysisRequest  # noqa: E402
 from models_report import ReportRepository, CompetitorReport  # noqa: E402
 from deps import rate_limiter, get_client_ip  # noqa: E402
 
-# -----------------------------------------------------------------------------
-# Logging
-# -----------------------------------------------------------------------------
 logging.basicConfig(level=os.getenv("LOGLEVEL", "INFO").upper())
 logger = logging.getLogger("ai2flows")
 
-# -----------------------------------------------------------------------------
-# FastAPI app
-# -----------------------------------------------------------------------------
+# Resolve absolute paths relative to this file
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / "static"
+TEMPLATES_DIR = BASE_DIR / "templates"
+
 app = FastAPI(
     title="AI2Flows SEO & Speed Analysis Tool",
     description="Comprehensive SEO analysis and website speed optimization tool by AI2Flows",
     version="2.0.0",
 )
 
-# Static files and templates (mount only if folders exist to avoid startup errors)
-if os.path.isdir("static"):
-    app.mount("/static", StaticFiles(directory="static"), name="static")
-else:
-    logger.warning("Static directory not found; skipping app.mount('/static', ...)")
+logger.info("Resolved BASE_DIR=%s", BASE_DIR)
+logger.info("Resolved STATIC_DIR=%s exists=%s", STATIC_DIR, STATIC_DIR.is_dir())
+logger.info("Resolved TEMPLATES_DIR=%s exists=%s", TEMPLATES_DIR, TEMPLATES_DIR.is_dir())
 
-if os.path.isdir("templates"):
-    templates = Jinja2Templates(directory="templates")
+# Static and templates
+if STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 else:
-    logger.warning("Templates directory not found; some pages may not render.")
-    templates = Jinja2Templates(directory=".")
+    logger.warning("Static directory not found at %s; skipping app.mount('/static', ...)", STATIC_DIR)
+
+if TEMPLATES_DIR.is_dir():
+    templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+else:
+    logger.warning("Templates directory not found at %s; some pages may not render.", TEMPLATES_DIR)
+    templates = Jinja2Templates(directory=str(BASE_DIR))
+
+# ==== keep the rest of your main.py contents below unchanged ====
+# services init, endpoints, etc.
 
 # -----------------------------------------------------------------------------
 # Initialize services (lightweight constructors)
@@ -378,3 +375,4 @@ if __name__ == "__main__":
         reload=os.getenv("RELOAD", "0") == "1",
         log_level=os.getenv("LOG_LEVEL", "info"),
     )
+
