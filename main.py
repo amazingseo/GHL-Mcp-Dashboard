@@ -3,7 +3,14 @@ import sys
 import logging
 import pkgutil
 from pathlib import Path
+from datetime import datetime
+import json
 
+def json_serializable(obj):
+    """JSON serializer function that handles datetime and other objects"""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 # -----------------------------------------------------------------------------
 # Early startup diagnostics (unchanged)
 # -----------------------------------------------------------------------------
@@ -385,6 +392,7 @@ if __name__ == "__main__":
         reload=os.getenv("RELOAD", "0") == "1",
         log_level=os.getenv("LOG_LEVEL", "info"),
     )
+
 
 
 
