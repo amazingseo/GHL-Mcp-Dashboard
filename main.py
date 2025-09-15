@@ -44,6 +44,7 @@ from fastapi import FastAPI, Request, Depends, HTTPException, Form  # noqa: E402
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from fastapi.templating import Jinja2Templates  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 import uvicorn  # noqa: E402
 from datetime import datetime  # noqa: E402
@@ -381,6 +382,7 @@ if __name__ == "__main__":
         reload=os.getenv("RELOAD", "0") == "1",
         log_level=os.getenv("LOG_LEVEL", "info"),
     )
+
 
 
 
