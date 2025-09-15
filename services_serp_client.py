@@ -1,197 +1,226 @@
 import asyncio
-import aiohttp
-import time
-from urllib.parse import urljoin, urlparse  # removed 'robots'
-from urllib.robotparser import RobotFileParser
-from bs4 import BeautifulSoup
-from typing import List, Dict, Optional, Set, Any
 import logging
-from dataclasses import dataclass
+from typing import Dict, List, Optional, Any
+from datetime import datetime
+
+import httpx
+from sqlalchemy import select
+
 from config import settings
+from deps import generate_cache_key
+from models_db import APICache, AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
 
-@dataclass
-class ScrapedPage:
-    """Data structure for scraped page content"""
-    url: str
-    title: str
-    meta_description: str
-    content: str
-    keywords: List[str]
-    status_code: int
-    error: Optional[str] = None
 
-class WebScraper:
-    """Ethical web scraper with robots.txt compliance"""
-    
+class SERPClient:
+    """Client for SERP API interactions with multiple providers."""
+
     def __init__(self):
-        self.session: Optional[aiohttp.ClientSession] = None
-        self.robots_cache: Dict[str, RobotFileParser] = {}
-        self.domain_delays: Dict[str, float] = {}
-        self.last_request_time: Dict[str, float] = {}
-        
-    async def __aenter__(self):
-        self.session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=settings.REQUEST_TIMEOUT),
-            headers={'User-Agent': settings.USER_AGENT}
-        )
-        return self
-        
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self.session:
-            await self.session.close()
-    
-    async def _get_robots_txt(self, domain: str) -> Optional[RobotFileParser]:
-        """Fetch and parse robots.txt for domain"""
-        if domain in self.robots_cache:
-            return self.robots_cache[domain]
-        
-        try:
-            robots_url = f"https://{domain}/robots.txt"
-            
-            if not self.session:
-                return None
-                
-            async with self.session.get(robots_url) as response:
-                if response.status == 200:
-                    robots_content = await response.text()
-                    rp = RobotFileParser()
-                    rp.set_url(robots_url)
-                    # Use the content we already fetched asynchronously:
-                    rp.parse(robots_content.splitlines())
+        self.providers: List[str] = []
 
-                    # Parse crawl-delay for per-domain throttling
-                    lines = robots_content.split('\n')
-                    current_user_agent = None
-                    
-                    for line in lines:
-                        line = line.strip()
-                        if line.startswith('#') or not line:
-                            continue
-                            
-                        if line.lower().startswith('user-agent:'):
-                            current_user_agent = line.split(':', 1)[1].strip()
-                        elif line.lower().startswith('crawl-delay:') and current_user_agent:
-                            if current_user_agent == '*' or 'competitiveanalyzer' in current_user_agent.lower():
-                                try:
-                                    delay = float(line.split(':', 1)[1].strip())
-                                    self.domain_delays[domain] = delay
-                                except ValueError:
-                                    pass
-                    
-                    self.robots_cache[domain] = rp
-                    return rp
-                    
-        except Exception as e:
-            logger.warning(f"Could not fetch robots.txt for {domain}: {e}")
-        
-        # Create permissive robots parser if fetch failed
-        rp = RobotFileParser()
-        self.robots_cache[domain] = rp
-        return rp
-    
-    def _can_fetch(self, domain: str, url: str, robots_parser: Optional[RobotFileParser]) -> bool:
-        """Check if URL can be fetched according to robots.txt"""
-        if not robots_parser:
-            return True
-            
-        try:
-            return robots_parser.can_fetch(settings.USER_AGENT, url)
-        except Exception:
-            # If robots.txt parsing fails, be conservative and allow
-            return True
+        # Initialize available providers
+        if settings.GOOGLE_CSE_API_KEY and settings.GOOGLE_CSE_CX:
+            self.providers.append("google_cse")
 
-    async def _respect_rate_limit(self, domain: str):
-        """Implement simple rate limiting per domain"""
-        min_delay = self.domain_delays.get(domain, 1.0)
-        now = time.time()
-        last = self.last_request_time.get(domain, 0)
-        wait = min_delay - (now - last)
-        if wait > 0:
-            await asyncio.sleep(wait)
-        self.last_request_time[domain] = time.time()
+        if settings.SERPAPI_KEY:
+            self.providers.append("serpapi")
 
-    async def _fetch_page(self, url: str) -> ScrapedPage:
-        """Fetch a single page and extract basic content"""
-        domain = urlparse(url).netloc
-        robots_parser = await self._get_robots_txt(domain)
+        if not self.providers:
+            logger.warning("No SERP API keys configured. Using mock data for development.")
+            self.providers.append("mock")
 
-        if not self._can_fetch(domain, url, robots_parser):
-            return ScrapedPage(url=url, title="", meta_description="", content="", keywords=[], status_code=0, error="Blocked by robots.txt")
+    async def get_domain_keywords(
+        self,
+        domain: str,
+        country: str = "US",
+        language: str = "en",
+        location: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Get localized keywords and rankings for a domain."""
+        cache_key = generate_cache_key("domain_keywords", domain, country, language, location or "")
+        cached = await self._get_cached_response(cache_key)
+        if cached:
+            logger.info("Using cached SERP data for %s [%s/%s%s]", domain, country, language, f" | {location}" if location else "")
+            return cached
 
-        await self._respect_rate_limit(domain)
-
-        if not self.session:
-            return ScrapedPage(url=url, title="", meta_description="", content="", keywords=[], status_code=0, error="Session not initialized")
-
-        try:
-            async with self.session.get(url) as response:
-                status = response.status
-                html = await response.text()
-                soup = BeautifulSoup(html, 'html.parser')
-
-                title_tag = soup.find('title')
-                title = title_tag.get_text().strip() if title_tag else ""
-                meta_desc_tag = soup.find('meta', attrs={'name': 'description'})
-                meta_description = meta_desc_tag.get('content', '').strip() if meta_desc_tag else ""
-
-                # Extract main text content
-                for el in soup(['script', 'style', 'nav', 'header', 'footer']):
-                    el.decompose()
-                body = soup.find('body')
-                text = body.get_text(separator=' ', strip=True) if body else soup.get_text(separator=' ', strip=True)
-
-                # Very simple keywords (top frequent words > 3 chars)
-                words = [w for w in text.lower().split() if len(w) > 3]
-                freq = {}
-                for w in words:
-                    freq[w] = freq.get(w, 0) + 1
-                top_keywords = [w for w, _ in sorted(freq.items(), key=lambda x: x[1], reverse=True)[:20]]
-
-                return ScrapedPage(
-                    url=url,
-                    title=title,
-                    meta_description=meta_description,
-                    content=text,
-                    keywords=top_keywords,
-                    status_code=status,
+        for provider in self.providers:
+            try:
+                logger.info(
+                    "Fetching SERP data for %s using %s [%s/%s%s]",
+                    domain,
+                    provider,
+                    country,
+                    language,
+                    f" | {location}" if location else "",
                 )
-        except Exception as e:
-            logger.error(f"Failed to fetch {url}: {e}")
-            return ScrapedPage(url=url, title="", meta_description="", content="", keywords=[], status_code=0, error=str(e))
+                if provider == "google_cse":
+                    data = await self._fetch_google_cse(domain, country, language)
+                elif provider == "serpapi":
+                    data = await self._fetch_serpapi(domain, country, language, location)
+                else:
+                    data = await self._fetch_mock_data(domain)
 
-    async def scrape_domain_pages(self, domain: str, top_urls: List[Dict[str, str]]) -> Dict[str, Any]:
-        """Fetch a subset of provided URLs and return combined content and per-page data.
-        top_urls: list of dicts with 'url' keys
-        """
-        # Select up to MAX_PAGES_PER_DOMAIN URLs
-        urls = [item.get('url') for item in top_urls if item.get('url')]
-        urls = urls[: max(1, min(len(urls), settings.MAX_PAGES_PER_DOMAIN))]
+                if data and data.get("keywords"):
+                    await self._cache_response(cache_key, provider, data)
+                    return data
+            except Exception as e:
+                logger.error("Provider %s failed for %s: %s", provider, domain, e)
+                continue
 
-        # Ensure session context
-        close_after = False
-        if not self.session:
-            self.session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=settings.REQUEST_TIMEOUT),
-                headers={'User-Agent': settings.USER_AGENT}
-            )
-            close_after = True
+        raise Exception("All SERP providers failed or returned no data")
 
-        try:
-            pages: List[ScrapedPage] = []
-            for url in urls:
-                page = await self._fetch_page(url)
-                pages.append(page)
+    async def _fetch_google_cse(self, domain: str, country: str, language: str) -> Dict[str, Any]:
+        """Fetch data using Google Custom Search Engine API."""
+        base_url = "https://www.googleapis.com/customsearch/v1"
+        params = {
+            "key": settings.GOOGLE_CSE_API_KEY,
+            "cx": settings.GOOGLE_CSE_CX,
+            "q": f"site:{domain}",
+            "num": 10,
+            # Localization hints (partial support)
+            "hl": language,
+            "gl": country.lower(),
+        }
 
-            combined_content = " \n".join(p.content for p in pages if p.content)
-            return {
-                'domain': domain,
-                'page_count': len(pages),
-                'pages': [p.__dict__ for p in pages],
-                'content': combined_content
-            }
-        finally:
-            if close_after and self.session:
-                await self.session.close()
-                self.session = None
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(base_url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+            keywords: List[Dict[str, Any]] = []
+            top_urls: List[Dict[str, Any]] = []
+
+            for idx, item in enumerate(data.get("items", []), 1):
+                title = item.get("title", "")
+                snippet = item.get("snippet", "")
+                url = item.get("link", "")
+
+                for kw in self._extract_keywords_from_text(f"{title} {snippet}")[:5]:
+                    keywords.append(
+                        {
+                            "keyword": kw,
+                            "position": idx,
+                            "url": url,
+                            "search_volume": None,
+                            "cpc": None,
+                            "competition": None,
+                        }
+                    )
+
+                top_urls.append(
+                    {
+                        "url": url,
+                        "title": title,
+                        "snippet": snippet,
+                        "position": idx,
+                    }
+                )
+
+            return {"keywords": keywords, "top_urls": top_urls, "provider": "google_cse"}
+
+    async def _fetch_serpapi(
+        self, domain: str, country: str, language: str, location: Optional[str]
+    ) -> Dict[str, Any]:
+        """Fetch data using SerpAPI."""
+        base_url = "https://serpapi.com/search"
+        params: Dict[str, Any] = {
+            "api_key": settings.SERPAPI_KEY,
+            "engine": "google",
+            "q": f"site:{domain}",
+            "num": 20,
+            "hl": language,
+            "gl": country.lower(),
+        }
+        if location:
+            params["location"] = location  # e.g., "Austin, Texas, United States"
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(base_url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+            keywords: List[Dict[str, Any]] = []
+            top_urls: List[Dict[str, Any]] = []
+
+            for idx, result in enumerate(data.get("organic_results", []), 1):
+                title = result.get("title", "")
+                snippet = result.get("snippet", "")
+                url = result.get("link", "")
+
+                for kw in self._extract_keywords_from_text(f"{title} {snippet}")[:3]:
+                    keywords.append(
+                        {
+                            "keyword": kw,
+                            "position": idx,
+                            "url": url,
+                            "search_volume": result.get("search_volume"),
+                            "cpc": result.get("cpc"),
+                            "competition": result.get("competition"),
+                        }
+                    )
+
+                top_urls.append(
+                    {
+                        "url": url,
+                        "title": title,
+                        "snippet": snippet,
+                        "position": idx,
+                    }
+                )
+
+            return {"keywords": keywords, "top_urls": top_urls, "provider": "serpapi"}
+
+    async def _fetch_mock_data(self, domain: str) -> Dict[str, Any]:
+        """Generate mock data for development/testing."""
+        await asyncio.sleep(0.3)  # Simulate API latency
+
+        head = domain.split(".")[0]
+        mock_keywords = [
+            {"keyword": f"{head} services", "position": 1, "search_volume": 1000, "cpc": 2.50},
+            {"keyword": f"{head} solutions", "position": 2, "search_volume": 800, "cpc": 3.20},
+            {"keyword": f"best {head}", "position": 3, "search_volume": 600, "cpc": 4.10},
+            {"keyword": f"{head} reviews", "position": 4, "search_volume": 400, "cpc": 1.80},
+            {"keyword": f"{head} pricing", "position": 5, "search_volume": 350, "cpc": 5.20},
+        ]
+
+        mock_urls = [
+            {"url": f"https://{domain}/", "title": f"{domain} - Home", "position": 1},
+            {"url": f"https://{domain}/about", "title": f"About {domain}", "position": 2},
+            {"url": f"https://{domain}/services", "title": f"{domain} Services", "position": 3},
+            {"url": f"https://{domain}/pricing", "title": f"{domain} Pricing", "position": 4},
+            {"url": f"https://{domain}/contact", "title": f"Contact {domain}", "position": 5},
+        ]
+
+        return {"keywords": mock_keywords, "top_urls": mock_urls, "provider": "mock"}
+
+    def _extract_keywords_from_text(self, text: str) -> List[str]:
+        """Extract potential keywords from text."""
+        import re
+
+        words = re.findall(r"\b[a-zA-Z]{3,}\b", text.lower())
+        stop_words = {"the", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by"}
+        return list(dict.fromkeys(w for w in words if w not in stop_words))[:10]
+
+    async def _get_cached_response(self, cache_key: str) -> Optional[Dict[str, Any]]:
+        """Get cached API response if available and not expired."""
+        async with AsyncSessionLocal() as session:
+            try:
+                result = await session.execute(
+                    select(APICache.response_data).where(
+                        (APICache.cache_key == cache_key) & (APICache.expires_at > datetime.utcnow())
+                    )
+                )
+                row = result.fetchone()
+                return row[0] if row else None
+            except Exception:
+                return None
+
+    async def _cache_response(self, cache_key: str, provider: str, data: Dict[str, Any]):
+        """Cache API response."""
+        async with AsyncSessionLocal() as session:
+            try:
+                session.add(APICache(cache_key=cache_key, provider=provider, response_data=data))
+                await session.commit()
+            except Exception as e:
+                logger.error("Failed to cache response: %s", e)
