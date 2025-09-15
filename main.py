@@ -192,8 +192,21 @@ async def api_speed_check(
         )
 
         # Convert datetime objects to strings
-        if 'analysis_date' in speed_results:
-            speed_results['analysis_date'] = speed_results['analysis_date'].isoformat()
+       # Check if analysis_date exists and handle appropriately
+if 'analysis_date' in speed_results:
+    analysis_date = speed_results['analysis_date']
+    if isinstance(analysis_date, str):
+        # Already a string, no conversion needed
+        pass
+    elif hasattr(analysis_date, 'isoformat'):
+        # Convert datetime to ISO string
+        speed_results['analysis_date'] = analysis_date.isoformat()
+    else:
+        # Fallback to current timestamp
+        speed_results['analysis_date'] = datetime.now().isoformat()
+else:
+    # Add timestamp if missing
+    speed_results['analysis_date'] = datetime.now().isoformat()
 
         return JSONResponse(
             {"success": True, "data": speed_results, "message": "Speed analysis completed successfully"}
@@ -392,6 +405,7 @@ if __name__ == "__main__":
         reload=os.getenv("RELOAD", "0") == "1",
         log_level=os.getenv("LOG_LEVEL", "info"),
     )
+
 
 
 
