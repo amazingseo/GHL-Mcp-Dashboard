@@ -38,7 +38,7 @@ class WebSpeedAnalyzer:
         
         analysis_results = {
             'url': url,
-            'analysis_date': datetime.utcnow(),
+            'analysis_date': datetime.utcnow().isoformat(),
             'loading_times': await self._measure_loading_times(url),
             'page_size_analysis': await self._analyze_page_size(url),
             'resource_analysis': await self._analyze_resources(url),
@@ -421,4 +421,5 @@ class WebSpeedAnalyzer:
         return int(final_score)
 
 # Global instance
+
 speed_analyzer = WebSpeedAnalyzer()
