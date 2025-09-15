@@ -38,7 +38,7 @@ class SEOAnalyzer:
         analysis_results = {
             'url': url,
             'is_own_site': is_own_site,
-            'analysis_date': datetime.utcnow(),
+            'analysis_date': datetime.utcnow().isoformat(),
             'on_page_seo': await self._analyze_on_page_seo(url),
             'technical_seo': await self._analyze_technical_seo(url),
             'content_analysis': await self._analyze_content_quality(url),
@@ -767,4 +767,5 @@ class SEOAnalyzer:
         return max(0, min(100, score))
 
 # Global instance
+
 seo_analyzer = SEOAnalyzer()
