@@ -5,12 +5,32 @@ import pkgutil
 from pathlib import Path
 from datetime import datetime
 import json
+from typing import Optional
 
 def json_serializable(obj):
     """JSON serializer function that handles datetime and other objects"""
     if isinstance(obj, datetime):
         return obj.isoformat()
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+
+def safe_datetime_conversion(data_dict, field_name='analysis_date'):
+    """Safely convert datetime fields to ISO format strings"""
+    if field_name in data_dict:
+        field_value = data_dict[field_name]
+        if isinstance(field_value, str):
+            # Already a string, no conversion needed
+            pass
+        elif hasattr(field_value, 'isoformat'):
+            # Convert datetime to ISO string
+            data_dict[field_name] = field_value.isoformat()
+        else:
+            # Fallback to current timestamp
+            data_dict[field_name] = datetime.now().isoformat()
+    else:
+        # Add timestamp if missing
+        data_dict[field_name] = datetime.now().isoformat()
+    return data_dict
+
 # -----------------------------------------------------------------------------
 # Early startup diagnostics (unchanged)
 # -----------------------------------------------------------------------------
@@ -54,8 +74,7 @@ from fastapi.templating import Jinja2Templates  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 import uvicorn  # noqa: E402
-from datetime import datetime  # noqa: E402
-from typing import Optional
+
 from models_db import init_db, get_db  # noqa: E402
 from services_traffic_estimator import TrafficEstimator  # noqa: E402
 from services_scraper import WebScraper  # noqa: E402
@@ -105,9 +124,6 @@ else:
     logger.warning("Templates directory not found at %s; some pages may not render.", TEMPLATES_DIR)
     templates = Jinja2Templates(directory=str(BASE_DIR))
 
-# ==== keep the rest of your main.py contents below unchanged ====
-# services init, endpoints, etc.
-
 # -----------------------------------------------------------------------------
 # Initialize services (lightweight constructors)
 # -----------------------------------------------------------------------------
@@ -141,10 +157,14 @@ def get_serp_client():
                     "keywords": [
                         {"keyword": f"{head} services", "position": 1, "search_volume": 1000},
                         {"keyword": f"{head} pricing", "position": 2, "search_volume": 350},
+                        {"keyword": f"best {head}", "position": 3, "search_volume": 800},
+                        {"keyword": f"{head} reviews", "position": 5, "search_volume": 600},
+                        {"keyword": f"{head} alternatives", "position": 8, "search_volume": 400},
                     ],
                     "top_urls": [
                         {"url": f"https://{domain}/", "title": f"{domain} - Home", "position": 1},
                         {"url": f"https://{domain}/about", "title": f"About {domain}", "position": 2},
+                        {"url": f"https://{domain}/services", "title": f"{domain} Services", "position": 3},
                     ],
                     "provider": "mock-fallback",
                 }
@@ -191,22 +211,13 @@ async def api_speed_check(
             db, "speed_analysis", url, client_ip, {"score": speed_results.get("score", 0)}
         )
 
-        # Convert datetime objects to strings
-       # Check if analysis_date exists and handle appropriately
-if 'analysis_date' in speed_results:
-    analysis_date = speed_results['analysis_date']
-    if isinstance(analysis_date, str):
-        # Already a string, no conversion needed
-        pass
-    elif hasattr(analysis_date, 'isoformat'):
-        # Convert datetime to ISO string
-        speed_results['analysis_date'] = analysis_date.isoformat()
-    else:
-        # Fallback to current timestamp
-        speed_results['analysis_date'] = datetime.now().isoformat()
-else:
-    # Add timestamp if missing
-    speed_results['analysis_date'] = datetime.now().isoformat()
+        # Safe datetime conversion
+        speed_results = safe_datetime_conversion(speed_results, 'analysis_date')
+        
+        # Handle any other datetime fields that might exist
+        for field in ['created_at', 'updated_at', 'timestamp']:
+            if field in speed_results:
+                speed_results = safe_datetime_conversion(speed_results, field)
 
         return JSONResponse(
             {"success": True, "data": speed_results, "message": "Speed analysis completed successfully"}
@@ -218,6 +229,7 @@ else:
         return JSONResponse(
             {"success": False, "error": str(e), "message": "Speed analysis failed"}, status_code=500
         )
+
 
 @app.post("/api/seo-analysis")
 async def api_seo_analysis(
@@ -244,6 +256,14 @@ async def api_seo_analysis(
             client_ip,
             {"score": seo_results.get("seo_score", 0), "is_own_site": is_own_site},
         )
+
+        # Safe datetime conversion
+        seo_results = safe_datetime_conversion(seo_results, 'analysis_date')
+        
+        # Handle any other datetime fields that might exist
+        for field in ['created_at', 'updated_at', 'timestamp']:
+            if field in seo_results:
+                seo_results = safe_datetime_conversion(seo_results, field)
 
         return JSONResponse(
             {"success": True, "data": seo_results, "message": "SEO analysis completed successfully"}
@@ -334,6 +354,9 @@ async def api_competitor_analysis(
             {"country": country, "language": language, "location": location, "keywords_found": len(serp_data["keywords"])},
         )
 
+        # Safe datetime conversion for any nested datetime objects
+        analysis_data = safe_datetime_conversion(analysis_data, 'analysis_date')
+
         return JSONResponse(
             {"success": True, "data": analysis_data, "message": "Competitor analysis completed successfully"}
         )
@@ -346,39 +369,75 @@ async def api_competitor_analysis(
         )
 
 
+# -----------------------------------------------------------------------------
+# Web Interface Endpoints
+# -----------------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
-    # Render existing file at repository root (now moved to templates/)
-    return templates.TemplateResponse("index.html", {"request": request})
+    """Home page with analysis forms"""
+    try:
+        return templates.TemplateResponse("index.html", {"request": request})
+    except Exception as e:
+        logger.error("Failed to render home page: %s", e)
+        return HTMLResponse(
+            "<h1>AI2Flows SEO & Speed Analysis Tool</h1><p>Service is running but templates are not available.</p>"
+        )
 
 
 @app.get("/speed-test", response_class=HTMLResponse)
 async def speed_test_page(request: Request):
-    return templates.TemplateResponse("speed_test_embed.html", {"request": request})
+    """Speed test page"""
+    try:
+        return templates.TemplateResponse("speed_test_embed.html", {"request": request})
+    except Exception as e:
+        logger.error("Failed to render speed test page: %s", e)
+        return HTMLResponse("<h1>Speed Test</h1><p>Use the API endpoint /api/speed-check for analysis.</p>")
 
 
 @app.get("/seo-analysis", response_class=HTMLResponse)
 async def seo_analysis_page(request: Request):
-    # Use existing informational page for now
-    return templates.TemplateResponse("report.html", {"request": request})
+    """SEO analysis page"""
+    try:
+        return templates.TemplateResponse("report.html", {"request": request})
+    except Exception as e:
+        logger.error("Failed to render SEO analysis page: %s", e)
+        return HTMLResponse("<h1>SEO Analysis</h1><p>Use the API endpoint /api/seo-analysis for analysis.</p>")
 
 
 @app.get("/competitor-analysis", response_class=HTMLResponse)
 async def competitor_analysis_page(request: Request):
-    # Reuse the home page form
-    return templates.TemplateResponse("index.html", {"request": request})
+    """Competitor analysis page"""
+    try:
+        return templates.TemplateResponse("index.html", {"request": request})
+    except Exception as e:
+        logger.error("Failed to render competitor analysis page: %s", e)
+        return HTMLResponse("<h1>Competitor Analysis</h1><p>Use the API endpoint /api/competitor-analysis for analysis.</p>")
 
 
 @app.post("/analyze")
-async def analyze_competitor(domain: str = Form(...), db: AsyncSession = Depends(get_db)):
-    return RedirectResponse(url="/api/competitor-analysis", status_code=307)
+async def analyze_competitor(
+    request: Request,
+    domain: str = Form(...), 
+    db: AsyncSession = Depends(get_db)
+):
+    """Legacy endpoint - redirect to API"""
+    # Forward the request to the API endpoint
+    form_data = await request.form()
+    return RedirectResponse(
+        url=f"/api/competitor-analysis?domain={domain}", 
+        status_code=307
+    )
 
 
+# -----------------------------------------------------------------------------
+# Health Check Endpoints
+# -----------------------------------------------------------------------------
 @app.get("/health")
 async def health_check():
+    """Basic health check"""
     return {
         "status": "healthy",
-        "timestamp": datetime.utcnow(),
+        "timestamp": datetime.utcnow().isoformat(),
         "service": "AI2Flows SEO & Speed Analysis Tool",
         "version": "2.0.0",
     }
@@ -386,12 +445,72 @@ async def health_check():
 
 @app.get("/api/health")
 async def api_health_check():
+    """API health check with more details"""
+    try:
+        # Test database connection
+        from models_db import get_db
+        db_status = "healthy"
+        
+        # Test services
+        services_status = {
+            "speed_analyzer": "available",
+            "seo_analyzer": "available", 
+            "serp_client": "available" if serp_client else "fallback_mode",
+            "database": db_status
+        }
+        
+        return JSONResponse(
+            {
+                "success": True,
+                "status": "healthy",
+                "timestamp": datetime.utcnow().isoformat(),
+                "message": "AI2Flows SEO & Speed Analysis API is running",
+                "services": services_status,
+                "version": "2.0.0"
+            }
+        )
+    except Exception as e:
+        logger.error("Health check failed: %s", e)
+        return JSONResponse(
+            {
+                "success": False,
+                "status": "unhealthy",
+                "timestamp": datetime.utcnow().isoformat(),
+                "error": str(e),
+                "message": "Health check failed"
+            },
+            status_code=503
+        )
+
+
+# -----------------------------------------------------------------------------
+# Error Handlers
+# -----------------------------------------------------------------------------
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Handle HTTP exceptions"""
     return JSONResponse(
-        {
-            "success": True,
-            "status": "healthy",
-            "timestamp": datetime.utcnow().isoformat(),
-            "message": "AI2Flows SEO & Speed Analysis API is running",
+        status_code=exc.status_code,
+        content={
+            "success": False,
+            "error": exc.detail,
+            "message": "Request failed",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    )
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """Handle general exceptions"""
+    logger.exception("Unhandled exception: %s", exc)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "success": False,
+            "error": "Internal server error",
+            "message": "An unexpected error occurred",
+            "timestamp": datetime.utcnow().isoformat()
         }
     )
 
@@ -405,11 +524,3 @@ if __name__ == "__main__":
         reload=os.getenv("RELOAD", "0") == "1",
         log_level=os.getenv("LOG_LEVEL", "info"),
     )
-
-
-
-
-
-
-
-
