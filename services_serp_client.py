@@ -18,14 +18,10 @@ class SERPClient:
 
     def __init__(self):
         self.providers: List[str] = []
-
-        # Initialize available providers
         if settings.GOOGLE_CSE_API_KEY and settings.GOOGLE_CSE_CX:
             self.providers.append("google_cse")
-
         if settings.SERPAPI_KEY:
             self.providers.append("serpapi")
-
         if not self.providers:
             logger.warning("No SERP API keys configured. Using mock data for development.")
             self.providers.append("mock")
@@ -41,7 +37,13 @@ class SERPClient:
         cache_key = generate_cache_key("domain_keywords", domain, country, language, location or "")
         cached = await self._get_cached_response(cache_key)
         if cached:
-            logger.info("Using cached SERP data for %s [%s/%s%s]", domain, country, language, f" | {location}" if location else "")
+            logger.info(
+                "Using cached SERP data for %s [%s/%s%s]",
+                domain,
+                country,
+                language,
+                f" | {location}" if location else "",
+            )
             return cached
 
         for provider in self.providers:
@@ -71,18 +73,15 @@ class SERPClient:
         raise Exception("All SERP providers failed or returned no data")
 
     async def _fetch_google_cse(self, domain: str, country: str, language: str) -> Dict[str, Any]:
-        """Fetch data using Google Custom Search Engine API."""
         base_url = "https://www.googleapis.com/customsearch/v1"
         params = {
             "key": settings.GOOGLE_CSE_API_KEY,
             "cx": settings.GOOGLE_CSE_CX,
             "q": f"site:{domain}",
             "num": 10,
-            # Localization hints (partial support)
             "hl": language,
             "gl": country.lower(),
         }
-
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(base_url, params=params)
             resp.raise_for_status()
@@ -90,7 +89,6 @@ class SERPClient:
 
             keywords: List[Dict[str, Any]] = []
             top_urls: List[Dict[str, Any]] = []
-
             for idx, item in enumerate(data.get("items", []), 1):
                 title = item.get("title", "")
                 snippet = item.get("snippet", "")
@@ -108,21 +106,13 @@ class SERPClient:
                         }
                     )
 
-                top_urls.append(
-                    {
-                        "url": url,
-                        "title": title,
-                        "snippet": snippet,
-                        "position": idx,
-                    }
-                )
+                top_urls.append({"url": url, "title": title, "snippet": snippet, "position": idx})
 
             return {"keywords": keywords, "top_urls": top_urls, "provider": "google_cse"}
 
     async def _fetch_serpapi(
         self, domain: str, country: str, language: str, location: Optional[str]
     ) -> Dict[str, Any]:
-        """Fetch data using SerpAPI."""
         base_url = "https://serpapi.com/search"
         params: Dict[str, Any] = {
             "api_key": settings.SERPAPI_KEY,
@@ -133,7 +123,7 @@ class SERPClient:
             "gl": country.lower(),
         }
         if location:
-            params["location"] = location  # e.g., "Austin, Texas, United States"
+            params["location"] = location
 
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(base_url, params=params)
@@ -142,7 +132,6 @@ class SERPClient:
 
             keywords: List[Dict[str, Any]] = []
             top_urls: List[Dict[str, Any]] = []
-
             for idx, result in enumerate(data.get("organic_results", []), 1):
                 title = result.get("title", "")
                 snippet = result.get("snippet", "")
@@ -160,21 +149,12 @@ class SERPClient:
                         }
                     )
 
-                top_urls.append(
-                    {
-                        "url": url,
-                        "title": title,
-                        "snippet": snippet,
-                        "position": idx,
-                    }
-                )
+                top_urls.append({"url": url, "title": title, "snippet": snippet, "position": idx})
 
             return {"keywords": keywords, "top_urls": top_urls, "provider": "serpapi"}
 
     async def _fetch_mock_data(self, domain: str) -> Dict[str, Any]:
-        """Generate mock data for development/testing."""
-        await asyncio.sleep(0.3)  # Simulate API latency
-
+        await asyncio.sleep(0.3)
         head = domain.split(".")[0]
         mock_keywords = [
             {"keyword": f"{head} services", "position": 1, "search_volume": 1000, "cpc": 2.50},
@@ -183,7 +163,6 @@ class SERPClient:
             {"keyword": f"{head} reviews", "position": 4, "search_volume": 400, "cpc": 1.80},
             {"keyword": f"{head} pricing", "position": 5, "search_volume": 350, "cpc": 5.20},
         ]
-
         mock_urls = [
             {"url": f"https://{domain}/", "title": f"{domain} - Home", "position": 1},
             {"url": f"https://{domain}/about", "title": f"About {domain}", "position": 2},
@@ -191,11 +170,9 @@ class SERPClient:
             {"url": f"https://{domain}/pricing", "title": f"{domain} Pricing", "position": 4},
             {"url": f"https://{domain}/contact", "title": f"Contact {domain}", "position": 5},
         ]
-
         return {"keywords": mock_keywords, "top_urls": mock_urls, "provider": "mock"}
 
     def _extract_keywords_from_text(self, text: str) -> List[str]:
-        """Extract potential keywords from text."""
         import re
 
         words = re.findall(r"\b[a-zA-Z]{3,}\b", text.lower())
@@ -203,7 +180,6 @@ class SERPClient:
         return list(dict.fromkeys(w for w in words if w not in stop_words))[:10]
 
     async def _get_cached_response(self, cache_key: str) -> Optional[Dict[str, Any]]:
-        """Get cached API response if available and not expired."""
         async with AsyncSessionLocal() as session:
             try:
                 result = await session.execute(
@@ -217,7 +193,6 @@ class SERPClient:
                 return None
 
     async def _cache_response(self, cache_key: str, provider: str, data: Dict[str, Any]):
-        """Cache API response."""
         async with AsyncSessionLocal() as session:
             try:
                 session.add(APICache(cache_key=cache_key, provider=provider, response_data=data))
