@@ -4,7 +4,7 @@ import time
 from urllib.parse import urljoin, urlparse  # removed 'robots'
 from urllib.robotparser import RobotFileParser
 from bs4 import BeautifulSoup
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional, Set, Any
 import logging
 from dataclasses import dataclass
 from config import settings
@@ -58,7 +58,6 @@ class WebScraper:
                     robots_content = await response.text()
                     rp = RobotFileParser()
                     rp.set_url(robots_url)
-                    # Previously: rp.read()  # This does blocking network I/O
                     # Use the content we already fetched asynchronously:
                     rp.parse(robots_content.splitlines())
 
@@ -104,6 +103,95 @@ class WebScraper:
             return True
 
     async def _respect_rate_limit(self, domain: str):
-        """Implement rate limiting per domain"""
-        current_time = time.time()
-        # ...
+        """Implement simple rate limiting per domain"""
+        min_delay = self.domain_delays.get(domain, 1.0)
+        now = time.time()
+        last = self.last_request_time.get(domain, 0)
+        wait = min_delay - (now - last)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        self.last_request_time[domain] = time.time()
+
+    async def _fetch_page(self, url: str) -> ScrapedPage:
+        """Fetch a single page and extract basic content"""
+        domain = urlparse(url).netloc
+        robots_parser = await self._get_robots_txt(domain)
+
+        if not self._can_fetch(domain, url, robots_parser):
+            return ScrapedPage(url=url, title="", meta_description="", content="", keywords=[], status_code=0, error="Blocked by robots.txt")
+
+        await self._respect_rate_limit(domain)
+
+        if not self.session:
+            return ScrapedPage(url=url, title="", meta_description="", content="", keywords=[], status_code=0, error="Session not initialized")
+
+        try:
+            async with self.session.get(url) as response:
+                status = response.status
+                html = await response.text()
+                soup = BeautifulSoup(html, 'html.parser')
+
+                title_tag = soup.find('title')
+                title = title_tag.get_text().strip() if title_tag else ""
+                meta_desc_tag = soup.find('meta', attrs={'name': 'description'})
+                meta_description = meta_desc_tag.get('content', '').strip() if meta_desc_tag else ""
+
+                # Extract main text content
+                for el in soup(['script', 'style', 'nav', 'header', 'footer']):
+                    el.decompose()
+                body = soup.find('body')
+                text = body.get_text(separator=' ', strip=True) if body else soup.get_text(separator=' ', strip=True)
+
+                # Very simple keywords (top frequent words > 3 chars)
+                words = [w for w in text.lower().split() if len(w) > 3]
+                freq = {}
+                for w in words:
+                    freq[w] = freq.get(w, 0) + 1
+                top_keywords = [w for w, _ in sorted(freq.items(), key=lambda x: x[1], reverse=True)[:20]]
+
+                return ScrapedPage(
+                    url=url,
+                    title=title,
+                    meta_description=meta_description,
+                    content=text,
+                    keywords=top_keywords,
+                    status_code=status,
+                )
+        except Exception as e:
+            logger.error(f"Failed to fetch {url}: {e}")
+            return ScrapedPage(url=url, title="", meta_description="", content="", keywords=[], status_code=0, error=str(e))
+
+    async def scrape_domain_pages(self, domain: str, top_urls: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Fetch a subset of provided URLs and return combined content and per-page data.
+        top_urls: list of dicts with 'url' keys
+        """
+        # Select up to MAX_PAGES_PER_DOMAIN URLs
+        urls = [item.get('url') for item in top_urls if item.get('url')]
+        urls = urls[: max(1, min(len(urls), settings.MAX_PAGES_PER_DOMAIN))]
+
+        # Ensure session context
+        close_after = False
+        if not self.session:
+            self.session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=settings.REQUEST_TIMEOUT),
+                headers={'User-Agent': settings.USER_AGENT}
+            )
+            close_after = True
+
+        try:
+            pages: List[ScrapedPage] = []
+            for url in urls:
+                page = await self._fetch_page(url)
+                pages.append(page)
+
+            combined_content = " \n".join(p.content for p in pages if p.content)
+            return {
+                'domain': domain,
+                'page_count': len(pages),
+                'pages': [p.__dict__ for p in pages],
+                'content': combined_content
+            }
+        finally:
+            if close_after and self.session:
+                await self.session.close()
+                self.session = None
