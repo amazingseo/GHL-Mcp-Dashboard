@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy import Column, String, Text, DateTime, Integer, Float, JSON, delete
+from sqlalchemy import Column, String, DateTime, Integer, Float, JSON, delete
 from datetime import datetime, timedelta
 import uuid
 from config import settings
@@ -51,18 +51,18 @@ class AnalyticsEvent(Base):
     event_type = Column(String, nullable=False)  # 'analysis_started', 'report_viewed', etc.
     domain = Column(String)
     timestamp = Column(DateTime, default=datetime.utcnow)
-    user_ip = Column(String)  # added to match usage
-    event_metadata = Column(JSON)  # renamed from 'metadata'
+    user_ip = Column(String)  # match usage
+    event_metadata = Column(JSON)  # metadata payload
 
-# Normalize DATABASE_URL for async Postgres in production
 def _normalize_db_url(url: str) -> str:
-    # Auto-upgrade postgres:// to postgresql+asyncpg:// for async engine usage
+    """Ensure async driver for Postgres URLs."""
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
     if url.startswith("postgresql://") and "+asyncpg" not in url:
         url = url.replace("postgresql://", "postgresql+asyncpg://")
     return url
 
+# Database engine and session
 engine = create_async_engine(
     _normalize_db_url(settings.DATABASE_URL),
     echo=False,
@@ -76,10 +76,12 @@ AsyncSessionLocal = sessionmaker(
 )
 
 async def init_db():
+    """Initialize database tables."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
 async def get_db() -> AsyncSession:
+    """Dependency to get database session."""
     async with AsyncSessionLocal() as session:
         try:
             yield session
@@ -87,6 +89,7 @@ async def get_db() -> AsyncSession:
             await session.close()
 
 async def cleanup_expired_data():
+    """Clean up expired cache entries and reports."""
     async with AsyncSessionLocal() as session:
         now = datetime.utcnow()
         await session.execute(delete(CachedReport).where(CachedReport.expires_at < now))
