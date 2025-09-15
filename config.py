@@ -83,7 +83,3 @@ def load_seed_topics():
 
 # Cache for seed topics
 SEED_TOPICS = load_seed_topics()
-
-# Cache for seed topics
-
-SEED_TOPICS = load_seed_topics()
