@@ -103,11 +103,17 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for now
+    allow_origins=["*"],  # Allow all origins
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["*"]
 )
+
+@app.options("/api/{path:path}")
+async def options_handler(path: str):
+    """Handle CORS preflight requests"""
+    return {"status": "ok"}
 logger.info("Resolved BASE_DIR=%s", BASE_DIR)
 logger.info("Resolved STATIC_DIR=%s exists=%s", STATIC_DIR, STATIC_DIR.is_dir())
 logger.info("Resolved TEMPLATES_DIR=%s exists=%s", TEMPLATES_DIR, TEMPLATES_DIR.is_dir())
@@ -524,3 +530,4 @@ if __name__ == "__main__":
         reload=os.getenv("RELOAD", "0") == "1",
         log_level=os.getenv("LOG_LEVEL", "info"),
     )
+
