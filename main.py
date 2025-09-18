@@ -331,13 +331,119 @@ async def test_api_connections():
         }
     
     return results
-# ============== Lead capture ==============
+# Your existing main.py structure...
+
+@app.get("/debug/test-apis")
+async def test_api_connections():
+    # ... your existing test-apis code ...
+    return results
+
+# ADD THE NEW DEBUG ENDPOINTS HERE (between test-apis and capture-lead):
+
+@app.get("/debug/env-raw")
+def debug_env_raw():
+    """Check raw environment variables"""
+    import os
+    return {
+        "timestamp": datetime.utcnow().isoformat(),
+        "railway_info": {
+            "environment": os.getenv("RAILWAY_ENVIRONMENT", "NOT_SET"),
+            "service": os.getenv("RAILWAY_SERVICE_NAME", "NOT_SET"), 
+            "deployment": os.getenv("RAILWAY_DEPLOYMENT_ID", "NOT_SET"),
+        },
+        "raw_env_vars": {
+            "GHL_API_KEY": {
+                "exists": "GHL_API_KEY" in os.environ,
+                "length": len(os.getenv("GHL_API_KEY", "")),
+                "preview": os.getenv("GHL_API_KEY", "")[:8] + "..." if os.getenv("GHL_API_KEY") else "NOT_SET",
+                "type": type(os.getenv("GHL_API_KEY")).__name__
+            },
+            "GHL_LOCATION_ID": {
+                "exists": "GHL_LOCATION_ID" in os.environ,
+                "length": len(os.getenv("GHL_LOCATION_ID", "")),
+                "preview": os.getenv("GHL_LOCATION_ID", "")[:8] + "..." if os.getenv("GHL_LOCATION_ID") else "NOT_SET",
+                "type": type(os.getenv("GHL_LOCATION_ID")).__name__
+            },
+            "GOOGLE_API_KEY": {
+                "exists": "GOOGLE_API_KEY" in os.environ,
+                "length": len(os.getenv("GOOGLE_API_KEY", "")),
+                "preview": os.getenv("GOOGLE_API_KEY", "")[:8] + "..." if os.getenv("GOOGLE_API_KEY") else "NOT_SET",
+                "type": type(os.getenv("GOOGLE_API_KEY")).__name__
+            }
+        },
+        "settings_vars": {
+            "GHL_API_KEY": {
+                "exists": bool(settings.GHL_API_KEY),
+                "length": len(settings.GHL_API_KEY) if settings.GHL_API_KEY else 0,
+                "preview": settings.GHL_API_KEY[:8] + "..." if settings.GHL_API_KEY else "NOT_SET"
+            },
+            "GHL_LOCATION_ID": {
+                "exists": bool(settings.GHL_LOCATION_ID),
+                "length": len(settings.GHL_LOCATION_ID) if settings.GHL_LOCATION_ID else 0,
+                "preview": settings.GHL_LOCATION_ID[:8] + "..." if settings.GHL_LOCATION_ID else "NOT_SET"
+            }
+        },
+        "all_env_vars_count": len(os.environ),
+        "env_vars_starting_with": {
+            "GHL_": [k for k in os.environ.keys() if k.startswith("GHL_")],
+            "GOOGLE_": [k for k in os.environ.keys() if k.startswith("GOOGLE_")],
+            "RAILWAY_": [k for k in os.environ.keys() if k.startswith("RAILWAY_")]
+        }
+    }
+
+@app.get("/debug/config-reload")
+def debug_config_reload():
+    """Force reload configuration"""
+    try:
+        # Import fresh config
+        import importlib
+        import config
+        importlib.reload(config)
+        
+        # Create new settings instance
+        new_settings = config.Settings()
+        
+        return {
+            "status": "reloaded",
+            "old_settings": {
+                "GHL_API_KEY": bool(settings.GHL_API_KEY),
+                "GHL_LOCATION_ID": bool(settings.GHL_LOCATION_ID)
+            },
+            "new_settings": {
+                "GHL_API_KEY": bool(new_settings.GHL_API_KEY),
+                "GHL_LOCATION_ID": bool(new_settings.GHL_LOCATION_ID)
+            }
+        }
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+
+# ============== Lead capture ============== (your existing code continues here)
+# Replace your existing @app.post("/api/capture-lead") function with this enhanced version:
+
 @app.post("/api/capture-lead")
 async def capture_lead(request: Request):
     try:
+        # Enhanced logging for debugging
+        logger.info("=== CAPTURE LEAD DEBUG START ===")
+        logger.info(f"Request received at: {datetime.utcnow().isoformat()}")
+        
+        # Check environment variables step by step
+        logger.info("Checking environment variables...")
+        
+        # Raw environment check
+        raw_ghl_key = os.getenv("GHL_API_KEY")
+        raw_ghl_location = os.getenv("GHL_LOCATION_ID")
+        
+        logger.info(f"Raw GHL_API_KEY: {'SET' if raw_ghl_key else 'NOT_SET'} (length: {len(raw_ghl_key) if raw_ghl_key else 0})")
+        logger.info(f"Raw GHL_LOCATION_ID: {'SET' if raw_ghl_location else 'NOT_SET'} (length: {len(raw_ghl_location) if raw_ghl_location else 0})")
+        
+        # Settings check
+        logger.info(f"Settings GHL_API_KEY: {'SET' if settings.GHL_API_KEY else 'NOT_SET'} (length: {len(settings.GHL_API_KEY) if settings.GHL_API_KEY else 0})")
+        logger.info(f"Settings GHL_LOCATION_ID: {'SET' if settings.GHL_LOCATION_ID else 'NOT_SET'} (length: {len(settings.GHL_LOCATION_ID) if settings.GHL_LOCATION_ID else 0})")
+        
         # Get JSON payload
         payload = await request.json()
-        logger.info(f"Received lead capture request: {payload}")
+        logger.info(f"Received payload keys: {list(payload.keys())}")
         
     except Exception as e:
         logger.error(f"Failed to parse request JSON: {e}")
@@ -354,32 +460,51 @@ async def capture_lead(request: Request):
     if not email:
         raise HTTPException(status_code=400, detail="Email required")
 
-    # DETAILED GHL CONFIGURATION CHECK
-    logger.info(f"GHL_API_KEY present: {bool(settings.GHL_API_KEY)}")
-    logger.info(f"GHL_LOCATION_ID present: {bool(settings.GHL_LOCATION_ID)}")
+    # More detailed GHL configuration check
+    logger.info("=== GHL CONFIGURATION CHECK ===")
     
-    if not settings.GHL_API_KEY:
+    # Use raw environment variables if settings are not working
+    ghl_api_key = settings.GHL_API_KEY or os.getenv("GHL_API_KEY")
+    ghl_location_id = settings.GHL_LOCATION_ID or os.getenv("GHL_LOCATION_ID")
+    
+    logger.info(f"Final GHL_API_KEY: {'SET' if ghl_api_key else 'NOT_SET'}")
+    logger.info(f"Final GHL_LOCATION_ID: {'SET' if ghl_location_id else 'NOT_SET'}")
+    
+    if not ghl_api_key:
         logger.error("GHL_API_KEY is missing or empty")
-        raise HTTPException(status_code=500, detail="GHL API key not configured")
+        # Return detailed debug info in error
+        debug_info = {
+            "raw_env": os.getenv("GHL_API_KEY", "NOT_SET")[:10] + "..." if os.getenv("GHL_API_KEY") else "NOT_SET",
+            "settings": settings.GHL_API_KEY[:10] + "..." if settings.GHL_API_KEY else "NOT_SET",
+            "env_var_exists": "GHL_API_KEY" in os.environ,
+            "all_ghl_vars": [k for k in os.environ.keys() if "GHL" in k.upper()]
+        }
+        raise HTTPException(status_code=500, detail=f"GHL API key not configured. Debug: {debug_info}")
         
-    if not settings.GHL_LOCATION_ID:
-        logger.error("GHL_LOCATION_ID is missing or empty") 
-        raise HTTPException(status_code=500, detail="GHL Location ID not configured")
+    if not ghl_location_id:
+        logger.error("GHL_LOCATION_ID is missing or empty")
+        debug_info = {
+            "raw_env": os.getenv("GHL_LOCATION_ID", "NOT_SET"),
+            "settings": settings.GHL_LOCATION_ID or "NOT_SET",
+            "env_var_exists": "GHL_LOCATION_ID" in os.environ
+        }
+        raise HTTPException(status_code=500, detail=f"GHL Location ID not configured. Debug: {debug_info}")
 
     first, last = (name.split(" ", 1) + [""])[:2]
 
-    # Create GHL contact
+    # Create GHL contact using the resolved variables
     ghl_payload = {
         "firstName": first or email.split("@")[0],
         "lastName": last,
         "email": email,
         "phone": phone,
-        "locationId": settings.GHL_LOCATION_ID,
+        "locationId": ghl_location_id,
         "source": source,
         "tags": tags,
     }
 
     logger.info(f"Sending to GHL: {ghl_payload}")
+    logger.info(f"Using API Key: {ghl_api_key[:10]}...{ghl_api_key[-4:] if len(ghl_api_key) > 14 else ''}")
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -388,7 +513,7 @@ async def capture_lead(request: Request):
             resp = await client.post(
                 "https://services.leadconnectorhq.com/contacts/",
                 headers={
-                    "Authorization": f"Bearer {settings.GHL_API_KEY}",
+                    "Authorization": f"Bearer {ghl_api_key}",
                     "Content-Type": "application/json",
                     "Accept": "application/json",
                     "Version": "2021-07-28",
@@ -410,6 +535,7 @@ async def capture_lead(request: Request):
                 )
 
             logger.info("GHL contact created successfully")
+            logger.info("=== CAPTURE LEAD DEBUG END ===")
 
     except httpx.TimeoutException:
         logger.error("GHL API timeout")
@@ -423,7 +549,6 @@ async def capture_lead(request: Request):
     token = issue_token(email)
 
     return {"success": True, "token": token}
-
 # ================== Speed Analysis ==================
 @app.post("/api/speed-check")
 async def speed_check(request: Request, url: str = Form(...)):
@@ -566,3 +691,4 @@ async def track_event(payload: dict):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+
