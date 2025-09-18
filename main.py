@@ -1,4 +1,4 @@
-# main.py - Debug Version
+# main.py - Fixed Version
 import os
 import time
 from urllib.parse import urlencode, urlparse
@@ -10,16 +10,25 @@ import sys
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# DEBUG: Check environment variables at startup
+# Import config FIRST, before any other custom imports
+try:
+    from config import settings
+    logger.info("Config imported successfully")
+    logger.info(f"Settings GHL_API_KEY: {bool(settings.GHL_API_KEY)}")
+    logger.info(f"Settings GHL_LOCATION_ID: {bool(settings.GHL_LOCATION_ID)}")
+except Exception as e:
+    logger.error(f"Config import error: {e}")
+    raise
+
+# DEBUG: Check environment variables at startup  
 logger.info("=== ENVIRONMENT VARIABLES DEBUG ===")
-logger.info(f"GHL_API_KEY exists: {bool(os.getenv('GHL_API_KEY'))}")
-logger.info(f"GHL_LOCATION_ID exists: {bool(os.getenv('GHL_LOCATION_ID'))}")
-from config import settings
-logger.info(f"GOOGLE_API_KEY (from settings): {bool(settings.GOOGLE_API_KEY)}")
-logger.info(f"GHL_API_KEY (from settings): {bool(settings.GHL_API_KEY)}")
-logger.info(f"GOOGLE_CSE_CX exists: {bool(os.getenv('GOOGLE_CSE_CX'))}")
+logger.info(f"Raw GHL_API_KEY exists: {bool(os.getenv('GHL_API_KEY'))}")
+logger.info(f"Raw GHL_LOCATION_ID exists: {bool(os.getenv('GHL_LOCATION_ID'))}")
+logger.info(f"Settings GHL_API_KEY: {bool(settings.GHL_API_KEY)}")
+logger.info(f"Settings GHL_LOCATION_ID: {bool(settings.GHL_LOCATION_ID)}")
 logger.info("=====================================")
 
+# Import other packages
 try:
     import httpx
     from fastapi import FastAPI, HTTPException, Request, Form
@@ -31,15 +40,8 @@ except ImportError as e:
     logger.error(f"Import error: {e}")
     raise
 
-# Import config AFTER checking environment
-try:
-    from config import settings
-    logger.info("Config imported successfully")
-    logger.info(f"Settings GHL_API_KEY: {bool(settings.GHL_API_KEY)}")
-    logger.info(f"Settings GHL_LOCATION_ID: {bool(settings.GHL_LOCATION_ID)}")
-except Exception as e:
-    logger.error(f"Config import error: {e}")
-    raise
+# DO NOT import config again - it's already imported above
+# Remove this duplicate: from config import settings
 
 APP_NAME = "ai2flows-seo-api"
 
@@ -691,4 +693,5 @@ async def track_event(payload: dict):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+
 
