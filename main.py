@@ -3,6 +3,8 @@ import os
 import time
 from urllib.parse import urlencode, urlparse
 import logging
+from datetime import datetime
+import sys
 
 # Set up logging first
 logging.basicConfig(level=logging.INFO)
@@ -160,7 +162,175 @@ def debug_env():
             "GHL_LOCATION_ID": len(settings.GHL_LOCATION_ID) if settings.GHL_LOCATION_ID else 0,
         }
     }
+# ADD THESE COMPLETE ENDPOINTS TO YOUR main.py
 
+@app.get("/debug/railway")
+def railway_debug():
+    """Comprehensive Railway environment debugging endpoint."""
+    debug_info = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "python_version": sys.version,
+        "environment": os.getenv("RAILWAY_ENVIRONMENT", "unknown"),
+        "service_name": os.getenv("RAILWAY_SERVICE_NAME", "unknown"),
+        "deployment_id": os.getenv("RAILWAY_DEPLOYMENT_ID", "unknown"),
+        "port": os.getenv("PORT", "not set"),
+        "variables": {
+            "railway_vars": {},
+            "app_vars": {},
+            "api_keys": {}
+        },
+        "validation": {
+            "ghl_configured": False,
+            "google_configured": False,
+            "issues": []
+        }
+    }
+    
+    # Collect Railway-specific variables
+    for key, value in os.environ.items():
+        if key.startswith('RAILWAY_'):
+            debug_info["variables"]["railway_vars"][key] = value
+    
+    # Collect app-specific variables (masked for security)
+    app_vars = [
+        "JWT_SECRET", "WINDOW_DAYS", "MAX_FREE", "REQUESTS_PER_MINUTE",
+        "PSI_STRATEGY", "ALLOWED_ORIGINS"
+    ]
+    
+    for var in app_vars:
+        value = os.getenv(var)
+        if value:
+            debug_info["variables"]["app_vars"][var] = f"SET (length: {len(value)})"
+        else:
+            debug_info["variables"]["app_vars"][var] = "NOT SET"
+    
+    # Collect and validate API keys
+    api_keys = {
+        "GHL_API_KEY": {"expected_prefix": ["eyJ", "pk_"], "required": True},
+        "GHL_LOCATION_ID": {"expected_prefix": ["loc_", ""], "required": True},
+        "GOOGLE_API_KEY": {"expected_prefix": ["AIza"], "required": True},
+        "GOOGLE_CSE_CX": {"expected_prefix": [""], "required": True}
+    }
+    
+    for key, config in api_keys.items():
+        value = os.getenv(key)
+        if value:
+            # Mask the key for security
+            masked_value = f"{value[:6]}...{value[-4:]}" if len(value) > 10 else "***"
+            debug_info["variables"]["api_keys"][key] = {
+                "status": "SET",
+                "length": len(value),
+                "preview": masked_value,
+                "format_valid": any(value.startswith(prefix) for prefix in config["expected_prefix"]) if config["expected_prefix"] else True
+            }
+            
+            # Validate format
+            if config["expected_prefix"] and not any(value.startswith(prefix) for prefix in config["expected_prefix"]):
+                debug_info["validation"]["issues"].append(f"{key} has incorrect format")
+        else:
+            debug_info["variables"]["api_keys"][key] = {
+                "status": "NOT SET",
+                "required": config["required"]
+            }
+            
+            if config["required"]:
+                debug_info["validation"]["issues"].append(f"{key} is required but not set")
+    
+    # Overall validation
+    ghl_api = os.getenv("GHL_API_KEY")
+    ghl_location = os.getenv("GHL_LOCATION_ID")
+    debug_info["validation"]["ghl_configured"] = bool(ghl_api and ghl_location)
+    
+    google_api = os.getenv("GOOGLE_API_KEY")
+    google_cse = os.getenv("GOOGLE_CSE_CX")
+    debug_info["validation"]["google_configured"] = bool(google_api and google_cse)
+    
+    # Environment variable count
+    debug_info["total_env_vars"] = len(os.environ)
+    
+    return debug_info
+
+
+@app.get("/debug/test-apis")
+async def test_api_connections():
+    """Test API connections with current environment variables."""
+    results = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "tests": {}
+    }
+    
+    # Test Google PageSpeed API
+    google_api_key = os.getenv("GOOGLE_API_KEY")
+    if google_api_key:
+        try:
+            test_url = "https://pagespeedonline.googleapis.com/pagespeedonline/v5/runPagespeed"
+            params = {
+                "url": "https://example.com",
+                "key": google_api_key,
+                "strategy": "mobile"
+            }
+            
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.get(test_url, params=params)
+                results["tests"]["google_pagespeed"] = {
+                    "status": "success" if response.status_code == 200 else "failed",
+                    "status_code": response.status_code,
+                    "api_key_format": "valid" if google_api_key.startswith("AIza") else "invalid"
+                }
+        except Exception as e:
+            results["tests"]["google_pagespeed"] = {
+                "status": "error",
+                "error": str(e)
+            }
+    else:
+        results["tests"]["google_pagespeed"] = {
+            "status": "skipped",
+            "reason": "GOOGLE_API_KEY not set"
+        }
+    
+    # Test Google Custom Search API
+    google_cse_cx = os.getenv("GOOGLE_CSE_CX")
+    if google_api_key and google_cse_cx:
+        try:
+            test_url = "https://www.googleapis.com/customsearch/v1"
+            params = {
+                "key": google_api_key,
+                "cx": google_cse_cx,
+                "q": "test",
+                "num": 1
+            }
+            
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.get(test_url, params=params)
+                results["tests"]["google_cse"] = {
+                    "status": "success" if response.status_code == 200 else "failed",
+                    "status_code": response.status_code
+                }
+        except Exception as e:
+            results["tests"]["google_cse"] = {
+                "status": "error",
+                "error": str(e)
+            }
+    else:
+        results["tests"]["google_cse"] = {
+            "status": "skipped",
+            "reason": "GOOGLE_API_KEY or GOOGLE_CSE_CX not set"
+        }
+    
+    # Test GHL API (just connection test, no actual API call)
+    ghl_api_key = os.getenv("GHL_API_KEY")
+    if ghl_api_key:
+        results["tests"]["ghl_format"] = {
+            "status": "valid" if ghl_api_key.startswith(("pit", "f4b_")) else "invalid_format",
+            "format_check": "passed" if ghl_api_key.startswith(("pit", "f4b")) else "failed - should start with 'eyJ' or 'pk_'"
+        }
+    else:
+        results["tests"]["ghl_format"] = {
+            "status": "skipped",
+            "reason": "GHL_API_KEY not set"
+        }
+    
+    return results
 # ============== Lead capture ==============
 @app.post("/api/capture-lead")
 async def capture_lead(request: Request):
@@ -396,4 +566,3 @@ async def track_event(payload: dict):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
-
