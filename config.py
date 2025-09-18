@@ -1,89 +1,47 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import Optional
+# config.py
+import os
 
+class Settings:
+    """Environment-backed settings (no extra deps)."""
 
-class Settings(BaseSettings):
-    """Application configuration."""
+    # --- Auth / Security ---
+    JWT_SECRET: str
+    WINDOW_DAYS: int
+    MAX_FREE: int
+    REQUESTS_PER_MINUTE: int
 
-    # Database
-    DATABASE_URL: str = "sqlite+aiosqlite:///./competitive_analysis.db"
+    # --- GoHighLevel (server-side only) ---
+    GHL_API_KEY: str | None
+    GHL_LOCATION_ID: str | None
 
-    # API Keys
-    GOOGLE_CSE_API_KEY: Optional[str] = None
-    GOOGLE_CSE_CX: Optional[str] = None
-    SERPAPI_KEY: Optional[str] = None
+    # --- Google APIs (single key for PSI + CSE) ---
+    GOOGLE_API_KEY: str | None
+    GOOGLE_CSE_CX: str | None
+    PSI_STRATEGY: str  # "mobile" or "desktop"
 
-    # Rate Limiting
-    REQUESTS_PER_SECOND: float = 1.0
-    MAX_CONCURRENT_REQUESTS: int = 5
+    # --- CORS ---
+    ALLOWED_ORIGINS: str  # comma-separated
 
-    # Scraping
-    USER_AGENT: str = "CompetitiveAnalyzer/1.0 (+https://ai2flows.com/contact)"
-    REQUEST_TIMEOUT: int = 30
-    MAX_PAGES_PER_DOMAIN: int = 20
+    def __init__(self) -> None:
+        # Auth / quotas
+        self.JWT_SECRET           = os.getenv("JWT_SECRET", "change-me")  # change in Railway
+        self.WINDOW_DAYS          = int(os.getenv("WINDOW_DAYS", "30"))
+        self.MAX_FREE             = int(os.getenv("MAX_FREE", "6"))
+        self.REQUESTS_PER_MINUTE  = int(os.getenv("REQUESTS_PER_MINUTE", "30"))
 
-    # Caching
-    CACHE_EXPIRY_HOURS: int = 24
-    MAX_CACHE_SIZE: int = 1000
+        # GHL
+        self.GHL_API_KEY          = os.getenv("GHL_API_KEY")              # PIT (Private Integration Token)
+        self.GHL_LOCATION_ID      = os.getenv("GHL_LOCATION_ID")          # Subaccount / Location ID
 
-    # Analysis
-    MAX_KEYWORDS_TO_ANALYZE: int = 100
-    MIN_CLUSTER_SIZE: int = 3
-    MAX_CLUSTERS: int = 15
+        # Google
+        self.GOOGLE_API_KEY       = os.getenv("GOOGLE_API_KEY")           # one key for PSI + CSE
+        self.GOOGLE_CSE_CX        = os.getenv("GOOGLE_CSE_CX")            # CSE "cx"
+        self.PSI_STRATEGY         = os.getenv("PSI_STRATEGY", "mobile")   # or "desktop"
 
-    # Reports
-    REPORT_EXPIRY_DAYS: int = 30
-    MAX_REPORTS_PER_USER: int = 50
+        # CORS
+        self.ALLOWED_ORIGINS      = os.getenv(
+            "ALLOWED_ORIGINS",
+            "https://ai2flows.com,https://www.ai2flows.com,http://localhost:5173,http://localhost:3000",
+        )
 
-    # PDF Generation
-    PDF_TIMEOUT: int = 60
-    INCLUDE_CHARTS_IN_PDF: bool = True
-
-    # AI2Flows Topics (updated to match repo file)
-    SEED_TOPICS_FILE: str = "config_seed_topics.txt"
-
-    # Pydantic v2 settings config
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-    )
-
-
-# Global settings instance
 settings = Settings()
-
-
-# Load seed topics
-def load_seed_topics():
-    """Load ai2flows.com seed topics from file."""
-    try:
-        with open(settings.SEED_TOPICS_FILE, "r", encoding="utf-8") as f:
-            topics = [line.strip() for line in f if line.strip()]
-        return topics
-    except FileNotFoundError:
-        # Default topics if file not found
-        return [
-            "automated workflows",
-            "business automation",
-            "workflow optimization",
-            "process automation",
-            "digital transformation",
-            "productivity tools",
-            "automation software",
-            "workflow management",
-            "business process improvement",
-            "task automation",
-            "workflow templates",
-            "automation solutions",
-            "workflow design",
-            "process optimization",
-            "business efficiency",
-        ]
-
-
-# Cache for seed topics
-SEED_TOPICS = load_seed_topics()
-
-# Cache for seed topics
-
-SEED_TOPICS = load_seed_topics()
