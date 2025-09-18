@@ -1,533 +1,318 @@
-import os
-import sys
-import logging
-import pkgutil
-from pathlib import Path
-from datetime import datetime
-import json
-from typing import Optional
+# main.py
+import time
+from urllib.parse import urlencode, urlparse
 
-def json_serializable(obj):
-    """JSON serializer function that handles datetime and other objects"""
-    if isinstance(obj, datetime):
-        return obj.isoformat()
-    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
+import httpx
+from fastapi import FastAPI, HTTPException, Request, Form
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+import jwt
 
-def safe_datetime_conversion(data_dict, field_name='analysis_date'):
-    """Safely convert datetime fields to ISO format strings"""
-    if field_name in data_dict:
-        field_value = data_dict[field_name]
-        if isinstance(field_value, str):
-            # Already a string, no conversion needed
-            pass
-        elif hasattr(field_value, 'isoformat'):
-            # Convert datetime to ISO string
-            data_dict[field_name] = field_value.isoformat()
-        else:
-            # Fallback to current timestamp
-            data_dict[field_name] = datetime.now().isoformat()
-    else:
-        # Add timestamp if missing
-        data_dict[field_name] = datetime.now().isoformat()
-    return data_dict
+from config import settings
 
-# -----------------------------------------------------------------------------
-# Early startup diagnostics (unchanged)
-# -----------------------------------------------------------------------------
-DEBUG_STARTUP = os.getenv("DEBUG_STARTUP", "1") == "1"
-if DEBUG_STARTUP:
-    print("DEBUG: Python:", sys.version, flush=True)
-    try:
-        import pydantic  # noqa: F401
-        from pydantic import __version__ as _pyd_ver  # type: ignore
-        print("DEBUG: pydantic version:", _pyd_ver, flush=True)
-    except Exception as _e:
-        print("DEBUG: pydantic import failed:", _e, flush=True)
-    try:
-        _ps_installed = pkgutil.find_loader("pydantic_settings") is not None
-        print("DEBUG: pydantic-settings installed?:", _ps_installed, flush=True)
-    except Exception as _e:
-        print("DEBUG: pydantic-settings check failed:", _e, flush=True)
-    try:
-        cfg_path = os.path.join(os.path.dirname(__file__), "config.py")
-        with open(cfg_path, "r", encoding="utf-8") as _f:
-            _head = "".join(_f.readlines()[:5])
-        print("DEBUG: first lines of config.py:\n" + _head, flush=True)
-    except Exception as _e:
-        print("DEBUG: could not read config.py:", _e, flush=True)
+APP_NAME = "ai2flows-seo-api"
 
-# Import settings FIRST
-try:
-    from config import settings  # noqa: F401
-except Exception:
-    logging.exception(
-        "Failed to import settings from config.py. "
-        "If you see 'BaseSettings has moved', ensure the first line of config.py is:\n"
-        "from pydantic_settings import BaseSettings"
-    )
-    raise
+app = FastAPI(title=APP_NAME)
 
-from fastapi import FastAPI, Request, Depends, HTTPException, Form  # noqa: E402
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse  # noqa: E402
-from fastapi.staticfiles import StaticFiles  # noqa: E402
-from fastapi.templating import Jinja2Templates  # noqa: E402
-from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
-import uvicorn  # noqa: E402
-
-from models_db import init_db, get_db  # noqa: E402
-from services_traffic_estimator import TrafficEstimator  # noqa: E402
-from services_scraper import WebScraper  # noqa: E402
-from services_nlp import NLPProcessor  # noqa: E402
-from services_clustering import KeywordClusterer  # noqa: E402
-from services_gap_analysis import ContentGapAnalyzer  # noqa: E402
-from services_pdf import PDFGenerator  # noqa: E402
-from services_speed_analyzer import WebSpeedAnalyzer, speed_analyzer  # noqa: E402
-from services_seo_analyzer import SEOAnalyzer, seo_analyzer  # noqa: E402
-from models_schemas import AnalysisRequest  # noqa: E402
-from models_report import ReportRepository, CompetitorReport  # noqa: E402
-from deps import rate_limiter, get_client_ip  # noqa: E402
-
-logging.basicConfig(level=os.getenv("LOGLEVEL", "INFO").upper())
-logger = logging.getLogger("ai2flows")
-
-# Resolve absolute paths relative to this file
-BASE_DIR = Path(__file__).resolve().parent
-STATIC_DIR = BASE_DIR / "static"
-TEMPLATES_DIR = BASE_DIR / "templates"
-
-app = FastAPI(
-    title="AI2Flows SEO & Speed Analysis Tool",
-    description="Comprehensive SEO analysis and website speed optimization tool by AI2Flows",
-    version="2.0.0",
-)
+# ---------- CORS (tight allowlist from env) ----------
+ALLOWED = [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-    expose_headers=["*"]
+    allow_origins=ALLOWED if ALLOWED else ["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
-@app.options("/api/{path:path}")
-async def options_handler(path: str):
-    """Handle CORS preflight requests"""
-    return {"status": "ok"}
-logger.info("Resolved BASE_DIR=%s", BASE_DIR)
-logger.info("Resolved STATIC_DIR=%s exists=%s", STATIC_DIR, STATIC_DIR.is_dir())
-logger.info("Resolved TEMPLATES_DIR=%s exists=%s", TEMPLATES_DIR, TEMPLATES_DIR.is_dir())
+# ---------- Abuse controls (in-memory; swap to DB/Redis for prod) ----------
+WINDOW_DAYS = settings.WINDOW_DAYS
+MAX_FREE = settings.MAX_FREE
+REQS_PER_MIN = settings.REQUESTS_PER_MINUTE
 
-# Static and templates
-if STATIC_DIR.is_dir():
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-else:
-    logger.warning("Static directory not found at %s; skipping app.mount('/static', ...)", STATIC_DIR)
+_usage: dict[str, dict] = {}        # { email: {count:int, windowStartISO:str} }
+_ip_bucket: dict[str, list[float]] = {}  # { ip: [timestamps] }
 
-if TEMPLATES_DIR.is_dir():
-    templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
-else:
-    logger.warning("Templates directory not found at %s; some pages may not render.", TEMPLATES_DIR)
-    templates = Jinja2Templates(directory=str(BASE_DIR))
+def _now_iso() -> str:
+    from datetime import datetime
+    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
 
-# -----------------------------------------------------------------------------
-# Initialize services (lightweight constructors)
-# -----------------------------------------------------------------------------
-serp_client = None
-traffic_estimator = TrafficEstimator()
-web_scraper = WebScraper()
-nlp_processor = NLPProcessor()
-clusterer = KeywordClusterer()
-gap_analyzer = ContentGapAnalyzer()
-pdf_generator = PDFGenerator()
-
-
-def get_serp_client():
-    """Lazy-load the SERP client to avoid import-time crashes."""
-    global serp_client
-    if serp_client is not None:
-        return serp_client
+def _within_window(start_iso: str) -> bool:
+    from datetime import datetime
+    if not start_iso:
+        return False
     try:
-        from services_serp_client import SERPClient  # lazy import here
-        serp_client = SERPClient()
-        logger.info("Initialized SERPClient successfully")
-    except Exception as e:
-        logger.exception("Failed to import/initialize SERPClient; falling back to mock client: %s", e)
+        dt = datetime.fromisoformat(start_iso)
+    except Exception:
+        return False
+    return (datetime.utcnow() - dt).days < WINDOW_DAYS
 
-        class _MockSERPClient:
-            async def get_domain_keywords(
-                self, domain: str, country: str = "US", language: str = "en", location: Optional[str] = None
-            ):
-                head = domain.split(".")[0]
-                return {
-                    "keywords": [
-                        {"keyword": f"{head} services", "position": 1, "search_volume": 1000},
-                        {"keyword": f"{head} pricing", "position": 2, "search_volume": 350},
-                        {"keyword": f"best {head}", "position": 3, "search_volume": 800},
-                        {"keyword": f"{head} reviews", "position": 5, "search_volume": 600},
-                        {"keyword": f"{head} alternatives", "position": 8, "search_volume": 400},
-                    ],
-                    "top_urls": [
-                        {"url": f"https://{domain}/", "title": f"{domain} - Home", "position": 1},
-                        {"url": f"https://{domain}/about", "title": f"About {domain}", "position": 2},
-                        {"url": f"https://{domain}/services", "title": f"{domain} Services", "position": 3},
-                    ],
-                    "provider": "mock-fallback",
-                }
+def enforce_quota(email: str) -> tuple[bool, str | None]:
+    row = _usage.get(email, {"count": 0, "windowStartISO": _now_iso()})
+    if not _within_window(row["windowStartISO"]):
+        row["count"] = 0
+        row["windowStartISO"] = _now_iso()
+    if row["count"] >= MAX_FREE:
+        return False, "Free analysis limit (6) reached. Please upgrade."
+    row["count"] += 1
+    _usage[email] = row
+    return True, None
 
-        serp_client = _MockSERPClient()
-    return serp_client
+def throttle_ip(ip: str, limit: int = REQS_PER_MIN, window_sec: int = 60) -> bool:
+    now = time.time()
+    bucket = _ip_bucket.get(ip, [])
+    bucket = [t for t in bucket if now - t < window_sec]
+    if len(bucket) >= limit:
+        return False
+    bucket.append(now)
+    _ip_bucket[ip] = bucket
+    return True
 
+def get_client_ip(request: Request) -> str:
+    xf = request.headers.get("x-forwarded-for")
+    if xf:
+        return xf.split(",")[0].strip()
+    return request.client.host
 
-# -----------------------------------------------------------------------------
-# Lifecycle
-# -----------------------------------------------------------------------------
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database and services on startup."""
+# ---------- JWT helpers ----------
+def issue_token(email: str, days: int = 7) -> str:
+    return jwt.encode(
+        {"email": email, "iat": int(time.time()), "exp": int(time.time()) + days * 86400},
+        settings.JWT_SECRET,
+        algorithm="HS256",
+    )
+
+def auth_user(request: Request) -> str:
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer token")
+    token = auth.split(" ", 1)[1]
     try:
-        await init_db()
-        logger.info("AI2Flows SEO & Speed Analysis Tool started successfully")
-    except Exception as e:
-        logger.exception("Database initialization failed: %s", e)
-        raise
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
+        email = payload.get("email")
+        if not email:
+            raise HTTPException(status_code=401, detail="Invalid token payload")
+        return email
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid/expired token")
 
+# ---------- Utils ----------
+def domain_from_url(url: str) -> str:
+    try:
+        host = urlparse(url).hostname or ""
+    except Exception:
+        host = ""
+    return host.replace("www.", "")
 
-# -----------------------------------------------------------------------------
-# API Endpoints for GHL Integration
-# -----------------------------------------------------------------------------
+# ---------- Routes ----------
+@app.get("/health")
+def health():
+    return {"ok": True, "service": APP_NAME}
+
+# ============== Lead capture -> creates GHL contact + returns JWT ==============
+@app.post("/api/capture-lead")
+async def capture_lead(payload: dict, request: Request):
+    email = (payload.get("email") or "").strip().lower()
+    name  = (payload.get("name") or "").strip()
+    phone = (payload.get("phone") or "").strip()
+    source = payload.get("source") or "seo_tool_free_trial"
+    tags   = payload.get("tags") or ["SEO Tool lead"]
+
+    if not email:
+        raise HTTPException(status_code=400, detail="Email required")
+    if not (settings.GHL_API_KEY and settings.GHL_LOCATION_ID):
+        raise HTTPException(status_code=500, detail="GHL not configured on server")
+
+    first, last = (name.split(" ", 1) + [""])[:2]
+
+    # Create/Upsert contact in GHL (server-side; keep PIT secret)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            "https://services.leadconnectorhq.com/contacts/",
+            headers={
+                "Authorization": f"Bearer {settings.GHL_API_KEY}",
+                "Content-Type": "application/json",
+                "Version": "2021-07-28",
+            },
+            json={
+                "firstName": first or email,
+                "lastName": last,
+                "email": email,
+                "phone": phone,
+                "locationId": settings.GHL_LOCATION_ID,
+                "source": source,
+                "tags": tags,
+            },
+        )
+        if resp.status_code >= 300:
+            detail = (resp.text or "")[:300]
+            raise HTTPException(status_code=502, detail=f"GHL contact create failed: {detail}")
+
+    # init quota window if first time and issue token
+    _usage.setdefault(email, {"count": 0, "windowStartISO": _now_iso()})
+    return {"success": True, "token": issue_token(email)}
+
+# ================== PageSpeed Insights (REAL data) ==================
 @app.post("/api/speed-check")
-async def api_speed_check(
+async def speed_check(
     request: Request,
-    url: str = Form(...),
-    db: AsyncSession = Depends(get_db),
+    url: str = Form(...)
 ):
-    """API endpoint for speed analysis - GHL compatible"""
-    try:
-        await rate_limiter(request)
-        logger.info("API Speed check requested for: %s", url)
+    email = auth_user(request)
+    ip = get_client_ip(request)
+    if not throttle_ip(ip):
+        return JSONResponse(status_code=429, content={"success": False, "message": "Too many requests. Slow down."})
 
-        async with speed_analyzer:
-            speed_results = await speed_analyzer.analyze_speed(url)
+    ok, msg = enforce_quota(email)
+    if not ok:
+        return JSONResponse(status_code=429, content={"success": False, "message": msg})
 
-        client_ip = get_client_ip(request)
-        from deps import log_analytics_event
+    if not url.lower().startswith("http"):
+        raise HTTPException(status_code=400, detail="Valid https:// URL required")
 
-        await log_analytics_event(
-            db, "speed_analysis", url, client_ip, {"score": speed_results.get("score", 0)}
-        )
+    # PSI v5
+    qs = {"url": url, "strategy": settings.PSI_STRATEGY}
+    if settings.GOOGLE_API_KEY:
+        qs["key"] = settings.GOOGLE_API_KEY
 
-        # Safe datetime conversion
-        speed_results = safe_datetime_conversion(speed_results, 'analysis_date')
-        
-        # Handle any other datetime fields that might exist
-        for field in ['created_at', 'updated_at', 'timestamp']:
-            if field in speed_results:
-                speed_results = safe_datetime_conversion(speed_results, field)
+    psi_url = f"https://pagespeedonline.googleapis.com/pagespeedonline/v5/runPagespeed?{urlencode(qs)}"
 
-        return JSONResponse(
-            {"success": True, "data": speed_results, "message": "Speed analysis completed successfully"}
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("API Speed analysis failed for %s: %s", url, e)
-        return JSONResponse(
-            {"success": False, "error": str(e), "message": "Speed analysis failed"}, status_code=500
-        )
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        r = await client.get(psi_url)
+        if r.status_code >= 300:
+            raise HTTPException(status_code=502, detail=f"PSI error {r.status_code}")
+        j = r.json()
 
+    lr = j.get("lighthouseResult", {}) or {}
+    audits = lr.get("audits", {}) or {}
+    perf = lr.get("categories", {}).get("performance", {}).get("score")
 
+    score100 = int(round(perf * 100)) if isinstance(perf, (int, float)) else None
+
+    def audit_val(key: str):
+        v = audits.get(key) or {}
+        return v.get("numericValue")
+
+    # Shape response expected by your frontend
+    data = {
+        "score": score100,
+        "loading_times": {
+            "ttfb": audit_val("server-response-time"),
+            "total_load_time": audit_val("speed-index"),
+            "response_code": 200
+        },
+        "lighthouse_metrics": {
+            "performance": score100,
+            "first_contentful_paint": audit_val("first-contentful-paint"),
+            "largest_contentful_paint": audit_val("largest-contentful-paint"),
+        },
+        "performance_issues": []
+    }
+
+    for key in ["render-blocking-resources", "uses-text-compression", "unminified-css", "unminified-javascript"]:
+        a = audits.get(key)
+        if not a:
+            continue
+        s = a.get("score", 0) or 0
+        if s < 1:
+            data["performance_issues"].append({
+                "severity": "high" if s < 0.5 else "medium",
+                "issue": a.get("title", key),
+                "description": a.get("description", "")
+            })
+
+    return {"success": True, "data": data}
+
+# ================== SEO Analysis (CSE) ==================
 @app.post("/api/seo-analysis")
-async def api_seo_analysis(
+async def seo_analysis(
     request: Request,
-    url: str = Form(...),
-    is_own_site: bool = Form(False),
-    db: AsyncSession = Depends(get_db),
+    url: str = Form(...)
 ):
-    """API endpoint for SEO analysis - GHL compatible"""
-    try:
-        await rate_limiter(request)
-        logger.info("API SEO analysis requested for: %s (own_site: %s)", url, is_own_site)
+    email = auth_user(request)
+    ip = get_client_ip(request)
+    if not throttle_ip(ip):
+        return JSONResponse(status_code=429, content={"success": False, "message": "Too many requests. Slow down."})
 
-        async with seo_analyzer:
-            seo_results = await seo_analyzer.analyze_seo(url, is_own_site)
+    ok, msg = enforce_quota(email)
+    if not ok:
+        return JSONResponse(status_code=429, content={"success": False, "message": msg})
 
-        client_ip = get_client_ip(request)
-        from deps import log_analytics_event
+    if not (settings.GOOGLE_API_KEY and settings.GOOGLE_CSE_CX):
+        raise HTTPException(status_code=500, detail="CSE key/cx missing on server")
+    if not url.lower().startswith("http"):
+        raise HTTPException(status_code=400, detail="Valid https:// URL required")
 
-        await log_analytics_event(
-            db,
-            "seo_analysis",
-            url,
-            client_ip,
-            {"score": seo_results.get("seo_score", 0), "is_own_site": is_own_site},
-        )
+    domain = domain_from_url(url)
+    q = f"site:{domain}"
 
-        # Safe datetime conversion
-        seo_results = safe_datetime_conversion(seo_results, 'analysis_date')
-        
-        # Handle any other datetime fields that might exist
-        for field in ['created_at', 'updated_at', 'timestamp']:
-            if field in seo_results:
-                seo_results = safe_datetime_conversion(seo_results, field)
+    params = {"key": settings.GOOGLE_API_KEY, "cx": settings.GOOGLE_CSE_CX, "q": q, "num": 10}
+    cse_url = f"https://www.googleapis.com/customsearch/v1?{urlencode(params)}"
 
-        return JSONResponse(
-            {"success": True, "data": seo_results, "message": "SEO analysis completed successfully"}
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("API SEO analysis failed for %s: %s", url, e)
-        return JSONResponse(
-            {"success": False, "error": str(e), "message": "SEO analysis failed"}, status_code=500
-        )
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.get(cse_url)
+        j = r.json()
 
+    idx = int(j.get("searchInformation", {}).get("totalResults", "0") or 0)
+    titles = [i.get("title") for i in (j.get("items") or [])][:5]
 
+    return {"success": True, "data": {"domain": domain, "indexedCount": idx, "sampleTitles": titles}}
+
+# ================== Competitor Analysis (CSE) ==================
 @app.post("/api/competitor-analysis")
-async def api_competitor_analysis(
+async def competitor_analysis(
     request: Request,
     domain: str = Form(...),
     country: str = Form("US"),
     language: str = Form("en"),
-    location: Optional[str] = Form(None),
-    db: AsyncSession = Depends(get_db),
+    location: str | None = Form(None),
 ):
-    """API endpoint for competitor analysis - GHL compatible"""
-    try:
-        await rate_limiter(request)
-        logger.info(
-            "API Competitor analysis requested for: %s [%s/%s%s]",
-            domain,
-            country,
-            language,
-            f" | {location}" if location else "",
-        )
+    email = auth_user(request)
+    ip = get_client_ip(request)
+    if not throttle_ip(ip):
+        return JSONResponse(status_code=429, content={"success": False, "message": "Too many requests. Slow down."})
 
-        serp_data = await get_serp_client().get_domain_keywords(
-            domain, country=country, language=language, location=location
-        )
+    ok, msg = enforce_quota(email)
+    if not ok:
+        return JSONResponse(status_code=429, content={"success": False, "message": msg})
 
-        if not serp_data or not serp_data.get("keywords"):
-            return JSONResponse(
-                {
-                    "success": False,
-                    "error": "No keyword data found for this domain",
-                    "message": "Unable to find ranking data",
-                },
-                status_code=400,
-            )
+    if not (settings.GOOGLE_API_KEY and settings.GOOGLE_CSE_CX):
+        raise HTTPException(status_code=500, detail="CSE key/cx missing on server")
 
-        scraped_data = await web_scraper.scrape_domain_pages(domain, serp_data.get("top_urls", [])[:10])
-        traffic_estimate = await traffic_estimator.estimate_traffic(domain, serp_data)
-        nlp_results = await nlp_processor.process_content(scraped_data.get("content", ""))
-        clusters = await clusterer.cluster_keywords(serp_data["keywords"])
-        gap_analysis = await gap_analyzer.analyze_gaps(
-            competitor_topics=clusters.get("topics", []),
-            competitor_keywords=serp_data["keywords"],
-        )
+    d = domain.replace("https://", "").replace("http://", "").split("/")[0]
 
-        analysis_data = {
-            "domain": domain,
-            "country": country,
-            "language": language,
-            "location": location,
-            "analysis_date": datetime.utcnow().isoformat(),
-            "traffic_estimate": traffic_estimate,
-            "keywords": serp_data["keywords"][:50],
-            "top_pages": serp_data.get("top_urls", [])[:10],
-            "content_summary": nlp_results,
-            "keyword_clusters": clusters,
-            "content_gaps": gap_analysis,
-            "competitor_insights": {
-                "total_keywords": len(serp_data["keywords"]),
-                "avg_position": (
-                    sum(kw.get("position", 0) for kw in serp_data["keywords"]) / len(serp_data["keywords"])
-                    if serp_data["keywords"]
-                    else 0
-                ),
-                "top_ranking_keywords": [kw for kw in serp_data["keywords"] if kw.get("position", 11) <= 3],
-            },
-        }
+    queries = [
+        f"site:{d}",
+        f"site:{d} blog",
+        f"site:{d} pricing",
+        f"site:{d} case study",
+        f"site:{d} services",
+    ]
 
-        client_ip = get_client_ip(request)
-        from deps import log_analytics_event
+    out = []
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for q in queries:
+            params = {"key": settings.GOOGLE_API_KEY, "cx": settings.GOOGLE_CSE_CX, "q": q, "num": 5}
+            # language restriction (optional)
+            if language:
+                params["lr"] = f"lang_{language}"
+            url = f"https://www.googleapis.com/customsearch/v1?{urlencode(params)}"
+            r = await client.get(url)
+            j = r.json()
+            items = [
+                {"title": i.get("title"), "link": i.get("link"), "snippet": i.get("snippet")}
+                for i in (j.get("items") or [])
+            ]
+            out.append({"query": q, "items": items})
 
-        await log_analytics_event(
-            db,
-            "competitor_analysis",
-            domain,
-            client_ip,
-            {"country": country, "language": language, "location": location, "keywords_found": len(serp_data["keywords"])},
-        )
+    return {"success": True, "data": {"domain": d, "results": out}}
 
-        # Safe datetime conversion for any nested datetime objects
-        analysis_data = safe_datetime_conversion(analysis_data, 'analysis_date')
+# ================== Optional analytics ==================
+@app.post("/api/track-event")
+async def track_event(payload: dict):
+    # No-op placeholder. Wire to your logs/analytics if needed.
+    return {"ok": True}
 
-        return JSONResponse(
-            {"success": True, "data": analysis_data, "message": "Competitor analysis completed successfully"}
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("API Competitor analysis failed for %s: %s", domain, e)
-        return JSONResponse(
-            {"success": False, "error": str(e), "message": "Competitor analysis failed"}, status_code=500
-        )
-
-
-# -----------------------------------------------------------------------------
-# Web Interface Endpoints
-# -----------------------------------------------------------------------------
-@app.get("/", response_class=HTMLResponse)
-async def home(request: Request):
-    """Home page with analysis forms"""
-    try:
-        return templates.TemplateResponse("index.html", {"request": request})
-    except Exception as e:
-        logger.error("Failed to render home page: %s", e)
-        return HTMLResponse(
-            "<h1>AI2Flows SEO & Speed Analysis Tool</h1><p>Service is running but templates are not available.</p>"
-        )
-
-
-@app.get("/speed-test", response_class=HTMLResponse)
-async def speed_test_page(request: Request):
-    """Speed test page"""
-    try:
-        return templates.TemplateResponse("speed_test_embed.html", {"request": request})
-    except Exception as e:
-        logger.error("Failed to render speed test page: %s", e)
-        return HTMLResponse("<h1>Speed Test</h1><p>Use the API endpoint /api/speed-check for analysis.</p>")
-
-
-@app.get("/seo-analysis", response_class=HTMLResponse)
-async def seo_analysis_page(request: Request):
-    """SEO analysis page"""
-    try:
-        return templates.TemplateResponse("report.html", {"request": request})
-    except Exception as e:
-        logger.error("Failed to render SEO analysis page: %s", e)
-        return HTMLResponse("<h1>SEO Analysis</h1><p>Use the API endpoint /api/seo-analysis for analysis.</p>")
-
-
-@app.get("/competitor-analysis", response_class=HTMLResponse)
-async def competitor_analysis_page(request: Request):
-    """Competitor analysis page"""
-    try:
-        return templates.TemplateResponse("index.html", {"request": request})
-    except Exception as e:
-        logger.error("Failed to render competitor analysis page: %s", e)
-        return HTMLResponse("<h1>Competitor Analysis</h1><p>Use the API endpoint /api/competitor-analysis for analysis.</p>")
-
-
-@app.post("/analyze")
-async def analyze_competitor(
-    request: Request,
-    domain: str = Form(...), 
-    db: AsyncSession = Depends(get_db)
-):
-    """Legacy endpoint - redirect to API"""
-    # Forward the request to the API endpoint
-    form_data = await request.form()
-    return RedirectResponse(
-        url=f"/api/competitor-analysis?domain={domain}", 
-        status_code=307
-    )
-
-
-# -----------------------------------------------------------------------------
-# Health Check Endpoints
-# -----------------------------------------------------------------------------
-@app.get("/health")
-async def health_check():
-    """Basic health check"""
-    return {
-        "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
-        "service": "AI2Flows SEO & Speed Analysis Tool",
-        "version": "2.0.0",
-    }
-
-
-@app.get("/api/health")
-async def api_health_check():
-    """API health check with more details"""
-    try:
-        # Test database connection
-        from models_db import get_db
-        db_status = "healthy"
-        
-        # Test services
-        services_status = {
-            "speed_analyzer": "available",
-            "seo_analyzer": "available", 
-            "serp_client": "available" if serp_client else "fallback_mode",
-            "database": db_status
-        }
-        
-        return JSONResponse(
-            {
-                "success": True,
-                "status": "healthy",
-                "timestamp": datetime.utcnow().isoformat(),
-                "message": "AI2Flows SEO & Speed Analysis API is running",
-                "services": services_status,
-                "version": "2.0.0"
-            }
-        )
-    except Exception as e:
-        logger.error("Health check failed: %s", e)
-        return JSONResponse(
-            {
-                "success": False,
-                "status": "unhealthy",
-                "timestamp": datetime.utcnow().isoformat(),
-                "error": str(e),
-                "message": "Health check failed"
-            },
-            status_code=503
-        )
-
-
-# -----------------------------------------------------------------------------
-# Error Handlers
-# -----------------------------------------------------------------------------
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
-    """Handle HTTP exceptions"""
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "success": False,
-            "error": exc.detail,
-            "message": "Request failed",
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    )
-
-
-@app.exception_handler(Exception)
-async def general_exception_handler(request: Request, exc: Exception):
-    """Handle general exceptions"""
-    logger.exception("Unhandled exception: %s", exc)
-    return JSONResponse(
-        status_code=500,
-        content={
-            "success": False,
-            "error": "Internal server error",
-            "message": "An unexpected error occurred",
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    )
-
-
-if __name__ == "__main__":
-    # IMPORTANT: if you run this file directly, point uvicorn at THIS module (not "main")
-    uvicorn.run(
-        "main:app",  # Change from "seo_speed_analysis:app"
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", "8000")),
-        reload=os.getenv("RELOAD", "0") == "1",
-        log_level=os.getenv("LOG_LEVEL", "info"),
-    )
-
+# ================== Run hint (Railway) ==================
+# Start command: uvicorn main:app --host 0.0.0.0 --port $PORT
