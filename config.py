@@ -16,12 +16,12 @@ class Settings:
         self.REQUESTS_PER_MINUTE = int(os.getenv("REQUESTS_PER_MINUTE", "30"))
         
         # GHL Settings - direct mapping
-        self.GHL_API_KEY = os.getenv("GHL_API_KEY")
-        self.GHL_LOCATION_ID = os.getenv("GHL_LOCATION_ID")
+        self.GHL_API_KEY = os.getenv("pit-738d9952-1839-41ac-bcc3-8e688e857f4b")
+        self.GHL_LOCATION_ID = os.getenv("7Wx4ptvmGKVNS1VQO8z0")
         
         # Google Settings - direct mapping  
-        self.GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-        self.GOOGLE_CSE_CX = os.getenv("GOOGLE_CSE_CX")
+        self.GOOGLE_API_KEY = os.getenv("AIzaSyBcyJ6OAseKjwXYzop7kIVf8qbRA8q9JjM")
+        self.GOOGLE_CSE_CX = os.getenv("AIzaSyBcyJ6OAseKjwXYzop7kIVf8qbRA8q9JjM")
         self.PSI_STRATEGY = os.getenv("PSI_STRATEGY", "mobile")
         
         # CORS
@@ -56,3 +56,4 @@ class Settings:
         logger.info("================================")
 
 settings = Settings()
+
