@@ -1,201 +1,90 @@
-import asyncio
-import logging
+import os
+import aiohttp
+from urllib.parse import urlencode
 from typing import Dict, List, Optional, Any
-from datetime import datetime
-
-import httpx
-from sqlalchemy import select
+import logging
 
 from config import settings
-from deps import generate_cache_key
-from models_db import APICache, AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
 
-
 class SERPClient:
-    """Client for SERP API interactions with multiple providers."""
+    """Google Programmable Search (CSE) client for competitor/domain discovery."""
 
     def __init__(self):
-        self.providers: List[str] = []
-        if settings.GOOGLE_CSE_API_KEY and settings.GOOGLE_CSE_CX:
-            self.providers.append("google_cse")
-        if settings.SERPAPI_KEY:
-            self.providers.append("serpapi")
-        if not self.providers:
-            logger.warning("No SERP API keys configured. Using mock data for development.")
-            self.providers.append("mock")
+        # one key for both PSI + CSE (preferred), fallback to old var for compatibility
+        self.api_key: Optional[str] = settings.GOOGLE_API_KEY or settings.GOOGLE_CSE_API_KEY
+        self.cx: Optional[str] = settings.GOOGLE_CSE_CX
+        self.session: Optional[aiohttp.ClientSession] = None
 
-    async def get_domain_keywords(
-        self,
-        domain: str,
-        country: str = "US",
-        language: str = "en",
-        location: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Get localized keywords and rankings for a domain."""
-        cache_key = generate_cache_key("domain_keywords", domain, country, language, location or "")
-        cached = await self._get_cached_response(cache_key)
-        if cached:
-            logger.info(
-                "Using cached SERP data for %s [%s/%s%s]",
-                domain,
-                country,
-                language,
-                f" | {location}" if location else "",
-            )
-            return cached
+        if not self.api_key or not self.cx:
+            logger.warning("CSE not configured; SERPClient will not return live results.")
 
-        for provider in self.providers:
-            try:
-                logger.info(
-                    "Fetching SERP data for %s using %s [%s/%s%s]",
-                    domain,
-                    provider,
-                    country,
-                    language,
-                    f" | {location}" if location else "",
-                )
-                if provider == "google_cse":
-                    data = await self._fetch_google_cse(domain, country, language)
-                elif provider == "serpapi":
-                    data = await self._fetch_serpapi(domain, country, language, location)
-                else:
-                    data = await self._fetch_mock_data(domain)
+    async def __aenter__(self):
+        self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
+        return self
 
-                if data and data.get("keywords"):
-                    await self._cache_response(cache_key, provider, data)
-                    return data
-            except Exception as e:
-                logger.error("Provider %s failed for %s: %s", provider, domain, e)
-                continue
+    async def __aexit__(self, exc_type, exc, tb):
+        if self.session:
+            await self.session.close()
 
-        raise Exception("All SERP providers failed or returned no data")
+    async def _cse(self, q: str, num: int = 10, language: Optional[str] = None) -> Dict[str, Any]:
+        if not self.session:
+            raise RuntimeError("SERPClient session not initialized")
+        if not self.api_key or not self.cx:
+            return {}
 
-    async def _fetch_google_cse(self, domain: str, country: str, language: str) -> Dict[str, Any]:
-        base_url = "https://www.googleapis.com/customsearch/v1"
         params = {
-            "key": settings.GOOGLE_CSE_API_KEY,
-            "cx": settings.GOOGLE_CSE_CX,
-            "q": f"site:{domain}",
-            "num": 10,
-            "hl": language,
-            "gl": country.lower(),
+            "key": self.api_key,
+            "cx": self.cx,
+            "q": q,
+            "num": num
         }
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(base_url, params=params)
-            resp.raise_for_status()
-            data = resp.json()
+        if language:
+            params["lr"] = f"lang_{language}"
 
-            keywords: List[Dict[str, Any]] = []
-            top_urls: List[Dict[str, Any]] = []
-            for idx, item in enumerate(data.get("items", []), 1):
-                title = item.get("title", "")
-                snippet = item.get("snippet", "")
-                url = item.get("link", "")
+        url = f"https://www.googleapis.com/customsearch/v1?{urlencode(params)}"
+        async with self.session.get(url) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                logger.error("CSE error %s: %s", resp.status, text[:300])
+                return {}
+            return await resp.json()
 
-                for kw in self._extract_keywords_from_text(f"{title} {snippet}")[:5]:
-                    keywords.append(
-                        {
-                            "keyword": kw,
-                            "position": idx,
-                            "url": url,
-                            "search_volume": None,
-                            "cpc": None,
-                            "competition": None,
-                        }
-                    )
+    def _extract_keywords(self, titles: List[str]) -> List[Dict[str, Any]]:
+        # Very simple keyword extraction from titles/snippets
+        words: Dict[str, int] = {}
+        for t in titles:
+            for w in t.lower().split():
+                if len(w) >= 4 and w.isalpha():
+                    words[w] = words.get(w, 0) + 1
+        ranked = sorted(words.items(), key=lambda x: x[1], reverse=True)[:50]
+        # shape into the structure your code expects
+        return [{"keyword": w, "position": i + 1, "search_volume": 0} for i, (w, _) in enumerate(ranked)]
 
-                top_urls.append({"url": url, "title": title, "snippet": snippet, "position": idx})
-
-            return {"keywords": keywords, "top_urls": top_urls, "provider": "google_cse"}
-
-    async def _fetch_serpapi(
-        self, domain: str, country: str, language: str, location: Optional[str]
-    ) -> Dict[str, Any]:
-        base_url = "https://serpapi.com/search"
-        params: Dict[str, Any] = {
-            "api_key": settings.SERPAPI_KEY,
-            "engine": "google",
-            "q": f"site:{domain}",
-            "num": 20,
-            "hl": language,
-            "gl": country.lower(),
-        }
-        if location:
-            params["location"] = location
-
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(base_url, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-
-            keywords: List[Dict[str, Any]] = []
-            top_urls: List[Dict[str, Any]] = []
-            for idx, result in enumerate(data.get("organic_results", []), 1):
-                title = result.get("title", "")
-                snippet = result.get("snippet", "")
-                url = result.get("link", "")
-
-                for kw in self._extract_keywords_from_text(f"{title} {snippet}")[:3]:
-                    keywords.append(
-                        {
-                            "keyword": kw,
-                            "position": idx,
-                            "url": url,
-                            "search_volume": result.get("search_volume"),
-                            "cpc": result.get("cpc"),
-                            "competition": result.get("competition"),
-                        }
-                    )
-
-                top_urls.append({"url": url, "title": title, "snippet": snippet, "position": idx})
-
-            return {"keywords": keywords, "top_urls": top_urls, "provider": "serpapi"}
-
-    async def _fetch_mock_data(self, domain: str) -> Dict[str, Any]:
-        await asyncio.sleep(0.3)
-        head = domain.split(".")[0]
-        mock_keywords = [
-            {"keyword": f"{head} services", "position": 1, "search_volume": 1000, "cpc": 2.50},
-            {"keyword": f"{head} solutions", "position": 2, "search_volume": 800, "cpc": 3.20},
-            {"keyword": f"best {head}", "position": 3, "search_volume": 600, "cpc": 4.10},
-            {"keyword": f"{head} reviews", "position": 4, "search_volume": 400, "cpc": 1.80},
-            {"keyword": f"{head} pricing", "position": 5, "search_volume": 350, "cpc": 5.20},
+    async def get_domain_keywords(self, domain: str, country: str = "US", language: str = "en", location: Optional[str] = None) -> Dict[str, Any]:
+        """Return top_urls and a naive 'keywords' list derived from CSE titles/snippets."""
+        queries = [
+            f"site:{domain}",
+            f"site:{domain} blog",
+            f"site:{domain} pricing",
+            f"site:{domain} case study",
+            f"site:{domain} services"
         ]
-        mock_urls = [
-            {"url": f"https://{domain}/", "title": f"{domain} - Home", "position": 1},
-            {"url": f"https://{domain}/about", "title": f"About {domain}", "position": 2},
-            {"url": f"https://{domain}/services", "title": f"{domain} Services", "position": 3},
-            {"url": f"https://{domain}/pricing", "title": f"{domain} Pricing", "position": 4},
-            {"url": f"https://{domain}/contact", "title": f"Contact {domain}", "position": 5},
-        ]
-        return {"keywords": mock_keywords, "top_urls": mock_urls, "provider": "mock"}
+        titles: List[str] = []
+        top_urls: List[Dict[str, str]] = []
 
-    def _extract_keywords_from_text(self, text: str) -> List[str]:
-        import re
+        async with self:
+            for q in queries:
+                data = await self._cse(q, num=10, language=language)
+                items = data.get("items", []) if data else []
+                for it in items:
+                    if it.get("link"):
+                        top_urls.append({"url": it["link"], "title": it.get("title", "")})
+                    if it.get("title"):
+                        titles.append(it["title"])
+                    if it.get("snippet"):
+                        titles.append(it["snippet"])
 
-        words = re.findall(r"\b[a-zA-Z]{3,}\b", text.lower())
-        stop_words = {"the", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by"}
-        return list(dict.fromkeys(w for w in words if w not in stop_words))[:10]
-
-    async def _get_cached_response(self, cache_key: str) -> Optional[Dict[str, Any]]:
-        async with AsyncSessionLocal() as session:
-            try:
-                result = await session.execute(
-                    select(APICache.response_data).where(
-                        (APICache.cache_key == cache_key) & (APICache.expires_at > datetime.utcnow())
-                    )
-                )
-                row = result.fetchone()
-                return row[0] if row else None
-            except Exception:
-                return None
-
-    async def _cache_response(self, cache_key: str, provider: str, data: Dict[str, Any]):
-        async with AsyncSessionLocal() as session:
-            try:
-                session.add(APICache(cache_key=cache_key, provider=provider, response_data=data))
-                await session.commit()
-            except Exception as e:
-                logger.error("Failed to cache response: %s", e)
+        keywords = self._extract_keywords(titles)
+        return {"keywords": keywords, "top_urls": top_urls, "provider": "google-cse"}
