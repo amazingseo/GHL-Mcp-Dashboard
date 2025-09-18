@@ -34,7 +34,15 @@ class Settings:
         self.GHL_LOCATION_ID      = os.getenv("GHL_LOCATION_ID")          # Subaccount / Location ID
 
         # Google
-        self.GOOGLE_API_KEY       = os.getenv("GOOGLE_API_KEY")           # one key for PSI + CSE
+        # In config.py, change this line:
+self.GOOGLE_API_KEY = os.getenv("GOOGLE_CSE_API_KEY")  # Changed name
+
+# Or add fallback logic:
+self.GOOGLE_API_KEY = (
+    os.getenv("GOOGLE_API_KEY") or 
+    os.getenv("GOOGLE_CSE_API_KEY") or 
+    os.getenv("GOOGLE_PAGESPEED_API_KEY")
+)
         self.GOOGLE_CSE_CX        = os.getenv("GOOGLE_CSE_CX")            # CSE "cx"
         self.PSI_STRATEGY         = os.getenv("PSI_STRATEGY", "mobile")   # or "desktop"
 
@@ -45,3 +53,4 @@ class Settings:
         )
 
 settings = Settings()
+
