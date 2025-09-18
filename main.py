@@ -12,7 +12,9 @@ logger = logging.getLogger(__name__)
 logger.info("=== ENVIRONMENT VARIABLES DEBUG ===")
 logger.info(f"GHL_API_KEY exists: {bool(os.getenv('GHL_API_KEY'))}")
 logger.info(f"GHL_LOCATION_ID exists: {bool(os.getenv('GHL_LOCATION_ID'))}")
-logger.info(f"GOOGLE_API_KEY exists: {bool(os.getenv('GOOGLE_API_KEY'))}")
+from config import settings
+logger.info(f"GOOGLE_API_KEY (from settings): {bool(settings.GOOGLE_API_KEY)}")
+logger.info(f"GHL_API_KEY (from settings): {bool(settings.GHL_API_KEY)}")
 logger.info(f"GOOGLE_CSE_CX exists: {bool(os.getenv('GOOGLE_CSE_CX'))}")
 logger.info("=====================================")
 
@@ -394,3 +396,4 @@ async def track_event(payload: dict):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+
